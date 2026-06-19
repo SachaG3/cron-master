@@ -1,5 +1,6 @@
 import net from "node:net";
 import { execFile } from "node:child_process";
+import { lookup } from "node:dns/promises";
 import { promisify } from "node:util";
 import { Job } from "./db.js";
 import { pool } from "./db.js";
@@ -7,6 +8,7 @@ import { renderTemplate, sendNotifications } from "./notify.js";
 import { getNotificationSettings } from "./settings.js";
 
 const execFileAsync = promisify(execFile);
+const blockPrivateTargets = process.env.CRON_MASTER_BLOCK_PRIVATE_TARGETS === "true";
 
 type ExecutionResult = {
   status: "success" | "failure";
@@ -56,22 +58,61 @@ async function withNotificationSettings(config: Record<string, unknown>) {
 }
 
 async function checkHttp(url: string, expectedStatus: number, timeoutMs = 10000) {
+  await assertAllowedUrl(url);
+  return fetchWithTimeout(url, { method: "GET" }, timeoutMs).then((response) => ({
+    ok: response.status === expectedStatus,
+    status: response.status,
+    durationMs: response.durationMs,
+  }));
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 10000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const started = Date.now();
   try {
-    const response = await fetch(url, { signal: controller.signal });
-    return {
-      ok: response.status === expectedStatus,
-      status: response.status,
-      durationMs: Date.now() - started,
-    };
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    return { response, status: response.status, ok: response.ok, durationMs: Date.now() - started };
   } finally {
     clearTimeout(timeout);
   }
 }
 
+function isPrivateAddress(address: string) {
+  if (net.isIPv4(address)) {
+    const parts = address.split(".").map(Number);
+    return (
+      parts[0] === 10 ||
+      parts[0] === 127 ||
+      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+      (parts[0] === 192 && parts[1] === 168) ||
+      (parts[0] === 169 && parts[1] === 254) ||
+      address === "0.0.0.0"
+    );
+  }
+  const normalized = address.toLowerCase();
+  return normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80") || normalized === "::";
+}
+
+async function assertAllowedHost(host: string) {
+  if (!host.trim()) throw new Error("Cible reseau manquante");
+  if (!blockPrivateTargets) return;
+  const addresses = net.isIP(host) ? [{ address: host }] : await lookup(host, { all: true });
+  if (addresses.some((entry) => isPrivateAddress(entry.address))) {
+    throw new Error(`Cible reseau privee refusee: ${host}`);
+  }
+}
+
+async function assertAllowedUrl(value: string) {
+  const url = new URL(value);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Seules les URLs HTTP/HTTPS sont autorisees");
+  }
+  await assertAllowedHost(url.hostname);
+}
+
 async function checkTcp(host: string, port: number, timeoutMs = 5000) {
+  await assertAllowedHost(host);
   return new Promise<{ ok: boolean; durationMs: number; error?: string }>((resolve) => {
     const started = Date.now();
     const socket = net.createConnection({ host, port, timeout: timeoutMs });
@@ -90,6 +131,7 @@ async function checkTcp(host: string, port: number, timeoutMs = 5000) {
 }
 
 async function pingHost(host: string, timeoutMs = 2000) {
+  await assertAllowedHost(host);
   const started = Date.now();
   const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
   try {
@@ -378,11 +420,12 @@ async function runBlocks(job: Job, notifyConfig: Record<string, unknown>): Promi
 
     if (block.kind === "webhook") {
       if (!block.url) throw new Error("Bloc webhook incomplet");
-      const response = await fetch(block.url, {
+      await assertAllowedUrl(block.url);
+      const { response } = await fetchWithTimeout(block.url, {
         method: block.method || "POST",
         headers: { "content-type": "application/json" },
         body: block.body ? renderTemplate(block.body, variables) : JSON.stringify({ job: job.name, at: variables.NOW }),
-      });
+      }, 10000);
       steps.push({ block: "webhook", url: block.url, status: response.status, ok: response.ok });
       if (!response.ok) throw new Error(`Webhook retourne ${response.status}`);
       continue;

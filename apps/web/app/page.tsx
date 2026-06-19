@@ -13,6 +13,7 @@ import {
   HelpCircle,
   Download,
   Globe2,
+  LogOut,
   PauseCircle,
   Play,
   PlayCircle,
@@ -97,6 +98,7 @@ type Deadman = { id: string; name: string; slug: string; expected_interval_minut
 type Credential = { id: string; name: string; type: string; created_at: string };
 type Maintenance = { id: string; name: string; starts_at: string; ends_at: string; enabled: boolean };
 type Dashboard = { activeJobs: number; openIncidents: number; missingDeadmen: number; runs24h: { total: number; success: number; failure: number } };
+type AuthUser = { id: string; email: string };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -244,6 +246,11 @@ export default function Home() {
     notifyOnFailure: true,
   });
   const [error, setError] = useState("");
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [logJobId, setLogJobId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<"dashboard" | "jobs" | "incidents" | "ops" | "settings" | "docs">("dashboard");
@@ -310,10 +317,72 @@ export default function Home() {
     });
   }, [jobs, jobSearch, jobSeverityFilter, jobStatusFilter]);
 
+  async function readError(response: Response) {
+    const text = await response.text();
+    try {
+      const parsed = JSON.parse(text);
+      return typeof parsed.error === "string" ? parsed.error : text;
+    } catch {
+      return text || response.statusText;
+    }
+  }
+
   async function api<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${API_URL}${path}`, init);
-    if (!response.ok) throw new Error(await response.text());
+    const response = await fetch(`${API_URL}${path}`, { ...init, credentials: "include" });
+    if (response.status === 401) {
+      setAuthUser(null);
+      throw new Error("Connexion requise");
+    }
+    if (!response.ok) throw new Error(await readError(response));
+    if (response.status === 204) return undefined as T;
     return response.json();
+  }
+
+  async function checkAuth() {
+    setAuthLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/auth/me`, { credentials: "include" });
+      if (response.ok) {
+        const data = (await response.json()) as { user: AuthUser };
+        setAuthUser(data.user);
+        setNeedsSetup(false);
+        return;
+      }
+      const setupResponse = await fetch(`${API_URL}/auth/setup-status`, { credentials: "include" });
+      const setupData = (await setupResponse.json()) as { needsSetup: boolean };
+      setNeedsSetup(setupData.needsSetup);
+      setAuthUser(null);
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : String(authError));
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function submitAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    const response = await fetch(`${API_URL}/auth/${needsSetup ? "register" : "login"}`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: authEmail, password: authPassword }),
+    });
+    if (!response.ok) {
+      setError(await readError(response));
+      return;
+    }
+    const data = (await response.json()) as { user: AuthUser };
+    setAuthUser(data.user);
+    setNeedsSetup(false);
+    setAuthPassword("");
+  }
+
+  async function logout() {
+    await fetch(`${API_URL}/auth/logout`, { method: "POST", credentials: "include" });
+    setAuthUser(null);
+    await checkAuth();
   }
 
   async function refresh() {
@@ -345,11 +414,17 @@ export default function Home() {
   }
 
   useEffect(() => {
+    checkAuth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!authUser) return;
     refresh();
     const timer = setInterval(refresh, 10000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authUser]);
 
   function buildSchedule(): { scheduleType: ScheduleType; cronExpression: string | null; runAt: string | null; label: string } {
     if (scheduleMode === "once") {
@@ -495,6 +570,13 @@ export default function Home() {
   }
 
   function applyTemplate(template: Template) {
+    if (template.id === "deadman") {
+      setDeadmanName(template.name);
+      setDeadmanSlug("backup-daily");
+      setActiveView("ops");
+      setComposerOpen(false);
+      return;
+    }
     setType(template.job.type === "deadman" ? "script" : (template.job.type as JobType));
     setName(template.name);
     setDescription(template.description);
@@ -600,6 +682,43 @@ export default function Home() {
   }
 
   const schedule = buildSchedule();
+
+  if (authLoading) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-background px-4">
+        <Card className="w-full max-w-sm p-5">
+          <p className="text-sm font-medium">Chargement de la session...</p>
+        </Card>
+      </main>
+    );
+  }
+
+  if (!authUser) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-background px-4">
+        <Card className="w-full max-w-sm p-5">
+          <div className="mb-5">
+            <h1 className="text-xl font-semibold">{needsSetup ? "Créer le compte admin" : "Connexion"}</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {needsSetup ? "Ce premier compte protégera l'interface d'administration." : "Connecte-toi pour gérer les jobs et les alertes."}
+            </p>
+          </div>
+          {error && <p className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+          <form onSubmit={submitAuth} className="grid gap-3">
+            <div className="grid gap-1">
+              <Label>Email</Label>
+              <Input type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} required />
+            </div>
+            <div className="grid gap-1">
+              <Label>Mot de passe</Label>
+              <Input type="password" minLength={8} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} required />
+            </div>
+            <Button type="submit">{needsSetup ? "Créer le compte" : "Se connecter"}</Button>
+          </form>
+        </Card>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-background">
@@ -868,8 +987,10 @@ export default function Home() {
               <p className="mt-1 text-sm text-muted-foreground">Monitoring, rappels, dead-man switch et automatisations.</p>
             </div>
             <div className="flex flex-wrap gap-2">
+              <span className="inline-flex h-9 items-center rounded-md border bg-muted px-3 text-sm text-muted-foreground">{authUser.email}</span>
               <Button variant="outline" onClick={() => window.open(`${API_URL}/status`, "_blank")}><Globe2 className="h-4 w-4" />Status</Button>
               <Button variant="outline" onClick={refresh}><RefreshCw className="h-4 w-4" />Actualiser</Button>
+              <Button variant="outline" onClick={logout}><LogOut className="h-4 w-4" />Sortir</Button>
               <Button onClick={resetComposer}><Plus className="h-4 w-4" />Nouveau job</Button>
             </div>
           </div>

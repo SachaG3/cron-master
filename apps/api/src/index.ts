@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
+import { authRouter, ensureAuthTables, requireAdminSession } from "./auth.js";
 import { createJob, deleteJob, duplicateJob, getJob, jobInputSchema, listJobs, listRuns, setJobEnabled, updateJob } from "./jobs.js";
 import { ensureCoreTables } from "./migrations.js";
 import { sendNotifications } from "./notify.js";
@@ -31,7 +32,12 @@ import { publicApiRouter } from "./publicApi.js";
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
 
-app.use(cors());
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  }),
+);
 app.use(express.json({ limit: "256kb" }));
 
 app.get("/health", (_req, res) => {
@@ -39,6 +45,37 @@ app.get("/health", (_req, res) => {
 });
 
 app.use("/api/v1", publicApiRouter);
+app.use("/auth", authRouter);
+
+app.all("/ping/:slug", async (req, res, next) => {
+  try {
+    const deadman = await pingDeadman(req.params.slug);
+    if (!deadman) return res.status(404).json({ error: "Ping introuvable" });
+    res.json({ ok: true, deadman });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/status", async (_req, res, next) => {
+  try {
+    res.json(await getPublicStatus());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/webhooks/:id", async (req, res, next) => {
+  try {
+    const job = await getJob(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job introuvable" });
+    res.json(await runJobNow({ ...job, config: { ...job.config, webhookPayload: req.body } }, { preserveSchedule: true }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use(requireAdminSession);
 
 app.get("/settings/notifications", async (_req, res, next) => {
   try {
@@ -276,7 +313,7 @@ app.post("/jobs/:id/run", async (req, res, next) => {
   try {
     const job = await getJob(req.params.id);
     if (!job) return res.status(404).json({ error: "Job introuvable" });
-    res.json(await runJobNow(job));
+    res.json(await runJobNow(job, { preserveSchedule: true }));
   } catch (error) {
     next(error);
   }
@@ -313,6 +350,7 @@ app.listen(port, () => {
   console.log(`Cron Master API listening on :${port}`);
   ensureCoreTables()
     .then(() => ensureSettingsTable())
+    .then(() => ensureAuthTables())
     .then(() => ensureProductTables())
     .then(() => startWorker())
     .catch((error) => console.error("database migration failed", error));
