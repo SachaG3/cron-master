@@ -18,7 +18,7 @@
     "lint": "npm run lint --workspaces",
     "test": "npm run test --workspaces",
     "commitlint": "commitlint --edit",
-    "commitlint:sample": "commitlint --from=HEAD~1 --to=HEAD",
+    "commitlint:sample": "commitlint --last",
     "prepare": "husky || true",
     "audit:ci": "npm audit --audit-level=high",
     "smoke": "node scripts/smoke-api.mjs"
