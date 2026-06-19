@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { createJob, deleteJob, duplicateJob, getJob, jobInputSchema, listJobs, listRuns, setJobEnabled, updateJob } from "./jobs.js";
+import { ensureCoreTables } from "./migrations.js";
 import { sendNotifications } from "./notify.js";
 import { ensureSettingsTable, getNotificationSettings, notificationSettingsSchema, updateNotificationSettings } from "./settings.js";
 import { runJobNow, startWorker } from "./worker.js";
@@ -310,8 +311,9 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 
 app.listen(port, () => {
   console.log(`Cron Master API listening on :${port}`);
-  ensureSettingsTable()
+  ensureCoreTables()
+    .then(() => ensureSettingsTable())
     .then(() => ensureProductTables())
     .then(() => startWorker())
-    .catch((error) => console.error("settings migration failed", error));
+    .catch((error) => console.error("database migration failed", error));
 });

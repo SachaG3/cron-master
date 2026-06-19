@@ -8,7 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "lint": "tsc --noEmit",
-    "test": "node --import tsx --test \"src/**/*.test.ts\""
+    "test": "node --import tsx --test src/notify.test.ts src/schedule.test.ts"
   },
   "dependencies": {
     "cron-parser": "^4.9.0",

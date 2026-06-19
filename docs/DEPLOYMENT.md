@@ -55,6 +55,8 @@ Le serveur doit avoir:
 - accès au registre GHCR si les images sont privées;
 - un dossier de déploiement, par exemple `/opt/cron-master`.
 
+Le schéma PostgreSQL est créé par l'API au démarrage. Le compose de production ne monte donc aucun fichier `init.sql`, ce qui évite les erreurs de bind mount sur les plateformes où le dossier de stack est en lecture seule.
+
 Création du dossier:
 
 ```bash
