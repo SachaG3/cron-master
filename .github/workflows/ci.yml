@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test-build-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint commit messages
+        if: github.event_name == 'pull_request'
+        run: npx commitlint --from="origin/${{ github.base_ref }}" --to=HEAD --verbose
+
+      - name: Lint pushed commit messages
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        run: npx commitlint --from="${{ github.event.before }}" --to="${{ github.sha }}" --verbose
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Security audit
+        run: npm run audit:ci
+
+      - name: Build app
+        run: npm run build
+
+      - name: Build Docker images
+        run: docker compose build api web
+
+      - name: Start stack
+        run: docker compose up -d
+
+      - name: Wait for API
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://localhost:4000/health >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs
+          exit 1
+
+      - name: Smoke test public API
+        run: npm run smoke
+        env:
+          API_BASE_URL: http://localhost:4000
+          CRON_MASTER_API_KEY: change-me-dev-key
+
+      - name: Smoke test web
+        run: curl -fsSI http://localhost:3001 >/dev/null
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v

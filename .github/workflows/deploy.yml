@@ -1,0 +1,126 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to deploy"
+        required: false
+        default: "latest"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    outputs:
+      api_image: ${{ steps.images.outputs.api_image }}
+      web_image: ${{ steps.images.outputs.web_image }}
+      tag: ${{ steps.tags.outputs.tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare image names
+        id: images
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "api_image=ghcr.io/${repo}/api" >> "$GITHUB_OUTPUT"
+          echo "web_image=ghcr.io/${repo}/web" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare tag
+        id: tags
+        run: |
+          tag="${{ github.event.inputs.tag }}"
+          if [ -z "$tag" ]; then tag="latest"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          push: true
+          tags: |
+            ${{ steps.images.outputs.api_image }}:${{ steps.tags.outputs.tag }}
+            ${{ steps.images.outputs.api_image }}:sha-${{ github.sha }}
+
+      - name: Build and push Web
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/web
+          push: true
+          tags: |
+            ${{ steps.images.outputs.web_image }}:${{ steps.tags.outputs.tag }}
+            ${{ steps.images.outputs.web_image }}:sha-${{ github.sha }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-push
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Copy production compose
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" "mkdir -p '${{ secrets.DEPLOY_PATH }}'"
+          scp -i ~/.ssh/deploy_key docker-compose.prod.yml "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PATH }}/docker-compose.prod.yml"
+
+      - name: Deploy stack
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" <<'EOF'
+          set -euo pipefail
+          cd "${{ secrets.DEPLOY_PATH }}"
+          cat > .env.production <<ENV
+          POSTGRES_DB=cronmaster
+          POSTGRES_USER=cronmaster
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          CRON_MASTER_API_KEY=${{ secrets.CRON_MASTER_API_KEY }}
+          DEFAULT_NTFY_SERVER=https://ntfy.sh
+          API_IMAGE=${{ needs.build-push.outputs.api_image }}:${{ needs.build-push.outputs.tag }}
+          WEB_IMAGE=${{ needs.build-push.outputs.web_image }}:${{ needs.build-push.outputs.tag }}
+          PUBLIC_API_URL=${{ secrets.PUBLIC_API_URL }}
+          API_PORT=4000
+          WEB_PORT=3001
+          ENV
+          docker compose --env-file .env.production -f docker-compose.prod.yml pull
+          docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+          EOF
+
+      - name: Remote smoke test
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" <<'EOF'
+          set -euo pipefail
+          cd "${{ secrets.DEPLOY_PATH }}"
+          . ./.env.production
+          for i in {1..60}; do
+            if curl -fsS "http://localhost:${API_PORT}/api/v1/health" -H "authorization: Bearer ${CRON_MASTER_API_KEY}" >/dev/null; then
+              curl -fsSI "http://localhost:${WEB_PORT}" >/dev/null
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose --env-file .env.production -f docker-compose.prod.yml logs
+          exit 1
+          EOF

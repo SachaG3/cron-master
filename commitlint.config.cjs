@@ -1,0 +1,77 @@
+const validScopes = [
+  "api",
+  "auth",
+  "ci",
+  "database",
+  "deploy",
+  "docker",
+  "docs",
+  "incidents",
+  "jobs",
+  "logs",
+  "mobile",
+  "monitoring",
+  "network",
+  "notifications",
+  "ops",
+  "repo",
+  "settings",
+  "tests",
+  "ui",
+  "web",
+  "workflow",
+];
+
+module.exports = {
+  extends: ["@commitlint/config-conventional"],
+  rules: {
+    "body-leading-blank": [2, "always"],
+    "footer-leading-blank": [2, "always"],
+    "header-max-length": [2, "always", 100],
+    "scope-empty": [2, "never"],
+    "scope-enum": [2, "always", validScopes],
+    "subject-empty": [2, "never"],
+    "subject-case": [0],
+    "subject-full-stop": [2, "never", "."],
+    "type-empty": [2, "never"],
+    "type-enum": [
+      2,
+      "always",
+      ["build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test"],
+    ],
+  },
+  prompt: {
+    messages: {
+      skip: "Entrée optionnelle. Appuie sur entrée pour passer.",
+      max: "Maximum %d caractères.",
+      min: "Minimum %d caractères.",
+      emptyWarning: "Champ requis.",
+      upperLimitWarning: "Trop long.",
+      lowerLimitWarning: "Trop court.",
+    },
+    questions: {
+      type: {
+        description: "Type de changement",
+        enum: {
+          feat: { description: "Nouvelle fonctionnalité", title: "Features" },
+          fix: { description: "Correction de bug", title: "Bug Fixes" },
+          docs: { description: "Documentation uniquement", title: "Documentation" },
+          ci: { description: "CI/CD", title: "Continuous Integration" },
+          chore: { description: "Maintenance sans impact produit", title: "Chores" },
+          refactor: { description: "Refactor sans changement fonctionnel", title: "Refactoring" },
+          test: { description: "Tests", title: "Tests" },
+          build: { description: "Build, dépendances, packaging", title: "Builds" },
+          perf: { description: "Performance", title: "Performance" },
+          style: { description: "Formatage ou style sans logique", title: "Styles" },
+          revert: { description: "Annulation d'un commit", title: "Reverts" },
+        },
+      },
+      scope: {
+        description: `Scope obligatoire: ${validScopes.join(", ")}`,
+      },
+      subject: {
+        description: "Résumé court en français, sans point final",
+      },
+    },
+  },
+};
