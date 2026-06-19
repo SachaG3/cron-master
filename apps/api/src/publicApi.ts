@@ -185,7 +185,7 @@ publicApiRouter.post("/jobs/:id/run", async (req, res, next) => {
   try {
     const job = await getJob(req.params.id);
     if (!job) return res.status(404).json({ error: "Job introuvable" });
-    res.json(await runJobNow({ ...job, config: { ...job.config, apiPayload: req.body } }));
+    res.json(await runJobNow({ ...job, config: { ...job.config, apiPayload: req.body } }, { preserveSchedule: true }));
   } catch (error) {
     next(error);
   }
@@ -195,7 +195,7 @@ publicApiRouter.post("/jobs/:id/webhook", async (req, res, next) => {
   try {
     const job = await getJob(req.params.id);
     if (!job) return res.status(404).json({ error: "Job introuvable" });
-    res.json(await runJobNow({ ...job, config: { ...job.config, webhookPayload: req.body } }));
+    res.json(await runJobNow({ ...job, config: { ...job.config, webhookPayload: req.body } }, { preserveSchedule: true }));
   } catch (error) {
     next(error);
   }

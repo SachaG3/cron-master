@@ -1,6 +1,56 @@
 import { z } from "zod";
+import parser from "cron-parser";
 import { pool, Job } from "./db.js";
 import { computeNextRun } from "./schedule.js";
+
+const blockSchema = z.discriminatedUnion("kind", [
+  z.object({ id: z.string().optional(), kind: z.literal("notify"), message: z.string().optional() }),
+  z.object({ id: z.string().optional(), kind: z.literal("http"), url: z.string().url(), expectedStatus: z.number().int().min(100).max(599).optional(), maxResponseMs: z.number().int().min(1).max(120_000).optional() }),
+  z.object({ id: z.string().optional(), kind: z.literal("tcp"), host: z.string().min(1), port: z.number().int().min(1).max(65_535) }),
+  z.object({ id: z.string().optional(), kind: z.literal("wait"), seconds: z.number().min(0).max(30).optional() }),
+  z.object({ id: z.string().optional(), kind: z.literal("webhook"), url: z.string().url(), method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(), body: z.string().optional() }),
+  z.object({ id: z.string().optional(), kind: z.literal("condition"), field: z.string().optional(), operator: z.enum(["=", "!=", ">", "<", "contains"]).optional(), value: z.string().optional(), message: z.string().optional() }),
+]);
+
+function validateConfig(input: { type: string; config: Record<string, unknown> }, ctx: z.RefinementCtx) {
+  const config = input.config;
+  const addIssue = (path: Array<string | number>, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["config", ...path], message });
+
+  if (input.type === "website_check") {
+    const parsed = z.object({
+      url: z.string().url(),
+      expectedStatus: z.number().int().min(100).max(599).optional(),
+      timeoutMs: z.number().int().min(100).max(120_000).optional(),
+    }).passthrough().safeParse(config);
+    if (!parsed.success) parsed.error.issues.forEach((issue) => addIssue(issue.path, issue.message));
+  }
+
+  if (input.type === "machine_check") {
+    const parsed = z.object({
+      host: z.string().min(1),
+      port: z.number().int().min(1).max(65_535).optional(),
+      timeoutMs: z.number().int().min(100).max(120_000).optional(),
+    }).passthrough().safeParse(config);
+    if (!parsed.success) parsed.error.issues.forEach((issue) => addIssue(issue.path, issue.message));
+  }
+
+  if (input.type === "network_monitor") {
+    const hasTargets =
+      Array.isArray(config.targets) &&
+      config.targets.some((target) => Boolean(target && typeof target === "object" && "host" in target && typeof target.host === "string" && target.host.trim()));
+    const hasHosts = typeof config.hosts === "string" && config.hosts.trim().length > 0;
+    if (!hasTargets && !hasHosts) addIssue(["targets"], "Au moins une cible reseau est requise");
+  }
+
+  if (input.type === "script") {
+    if (Array.isArray(config.blocks)) {
+      const parsed = z.array(blockSchema).min(1).safeParse(config.blocks);
+      if (!parsed.success) parsed.error.issues.forEach((issue) => addIssue(["blocks", ...issue.path], issue.message));
+    } else if (typeof config.script !== "string" || !config.script.trim()) {
+      addIssue(["script"], "Un script texte ou au moins un bloc est requis");
+    }
+  }
+}
 
 export const jobInputSchema = z.object({
   name: z.string().min(1),
@@ -12,6 +62,23 @@ export const jobInputSchema = z.object({
   timezone: z.string().optional().default("Europe/Paris"),
   enabled: z.boolean().optional().default(true),
   config: z.record(z.unknown()).optional().default({}),
+}).superRefine((input, ctx) => {
+  if (input.scheduleType === "cron" && !input.cronExpression) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["cronExpression"], message: "Expression cron requise" });
+  } else if (input.scheduleType === "cron" && input.cronExpression) {
+    try {
+      parser.parseExpression(input.cronExpression, { tz: input.timezone });
+    } catch {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["cronExpression"], message: "Expression cron invalide" });
+    }
+  }
+  if (input.scheduleType === "once") {
+    const timestamp = input.runAt ? new Date(input.runAt).getTime() : NaN;
+    if (Number.isNaN(timestamp)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["runAt"], message: "Date d'execution invalide" });
+    }
+  }
+  validateConfig(input, ctx);
 });
 
 export type JobInput = z.infer<typeof jobInputSchema>;

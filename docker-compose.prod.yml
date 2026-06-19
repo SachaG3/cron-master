@@ -21,6 +21,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-cronmaster}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cronmaster}
       DEFAULT_NTFY_SERVER: ${DEFAULT_NTFY_SERVER:-https://ntfy.sh}
       CRON_MASTER_API_KEY: ${CRON_MASTER_API_KEY:?CRON_MASTER_API_KEY is required}
+      CRON_MASTER_SETUP_TOKEN: ${CRON_MASTER_SETUP_TOKEN:?CRON_MASTER_SETUP_TOKEN is required}
     ports:
       - "${API_PORT:-4000}:4000"
     depends_on:

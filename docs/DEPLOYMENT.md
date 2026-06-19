@@ -43,6 +43,7 @@ Dans GitHub, configure ces secrets:
 | `DEPLOY_SSH_KEY` | Clé privée SSH |
 | `DEPLOY_PATH` | Dossier cible sur le serveur |
 | `CRON_MASTER_API_KEY` | Clé API publique |
+| `CRON_MASTER_SETUP_TOKEN` | Token requis pour créer le premier compte admin |
 | `POSTGRES_PASSWORD` | Mot de passe PostgreSQL |
 | `PUBLIC_API_URL` | URL publique utilisée par le front |
 
@@ -92,6 +93,21 @@ curl http://localhost:4000/api/v1/health \
   -H "authorization: Bearer $CRON_MASTER_API_KEY"
 curl -I http://localhost:3001
 ```
+
+## Premier compte admin
+
+En production, `CRON_MASTER_SETUP_TOKEN` est obligatoire. Au premier accès web, l'interface demande ce token en plus de l'email et du mot de passe admin. Une fois le premier compte créé, `/auth/register` refuse toute nouvelle création.
+
+Si un compte admin existe déjà alors que tu ne l'as pas créé, reprends la main depuis le serveur après avoir configuré un nouveau `CRON_MASTER_SETUP_TOKEN`:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml exec postgres \
+  psql -U cronmaster cronmaster \
+  -c "TRUNCATE admin_sessions, admin_users RESTART IDENTITY CASCADE;"
+docker compose --env-file .env.production -f docker-compose.prod.yml restart api
+```
+
+Ouvre ensuite l'interface web et recrée ton compte avec le token de setup.
 
 ## Rollback
 

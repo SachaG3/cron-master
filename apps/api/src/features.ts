@@ -358,7 +358,7 @@ export async function getPublicStatus() {
 export async function exportData() {
   const [jobs, credentials, maintenance, deadmen] = await Promise.all([
     pool.query("SELECT * FROM jobs ORDER BY created_at"),
-    pool.query("SELECT name, type, value FROM credentials ORDER BY created_at"),
+    pool.query("SELECT name, type, true AS redacted FROM credentials ORDER BY created_at"),
     pool.query("SELECT name, job_id, starts_at, ends_at, enabled FROM maintenance_windows ORDER BY created_at"),
     pool.query("SELECT name, slug, expected_interval_minutes, grace_minutes, enabled FROM deadman_checks ORDER BY created_at"),
   ]);
