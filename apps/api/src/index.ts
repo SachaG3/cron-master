@@ -27,9 +27,13 @@ import {
   listMaintenance,
   listMaintenanceCalendar,
   muteIncident,
+  pingDeadmanById,
   pingDeadman,
   resolveIncident,
+  rotateDeadmanSlug,
+  setDeadmanEnabled,
   templates,
+  updateDeadman,
   validateImportData,
 } from "./features.js";
 import { publicApiRouter } from "./publicApi.js";
@@ -299,6 +303,56 @@ app.get("/deadman", async (_req, res, next) => {
 app.post("/deadman", async (req, res, next) => {
   try {
     res.status(201).json(await createDeadman(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/deadman/:id", async (req, res, next) => {
+  try {
+    const deadman = await updateDeadman(req.params.id, req.body);
+    if (!deadman) return res.status(404).json({ error: "Dead-man introuvable" });
+    res.json(deadman);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/deadman/:id/ping", async (req, res, next) => {
+  try {
+    const deadman = await pingDeadmanById(req.params.id);
+    if (!deadman) return res.status(404).json({ error: "Dead-man introuvable" });
+    res.json({ ok: true, deadman });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/deadman/:id/rotate", async (req, res, next) => {
+  try {
+    const deadman = await rotateDeadmanSlug(req.params.id);
+    if (!deadman) return res.status(404).json({ error: "Dead-man introuvable" });
+    res.json(deadman);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/deadman/:id/pause", async (req, res, next) => {
+  try {
+    const deadman = await setDeadmanEnabled(req.params.id, false);
+    if (!deadman) return res.status(404).json({ error: "Dead-man introuvable" });
+    res.json(deadman);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/deadman/:id/resume", async (req, res, next) => {
+  try {
+    const deadman = await setDeadmanEnabled(req.params.id, true);
+    if (!deadman) return res.status(404).json({ error: "Dead-man introuvable" });
+    res.json(deadman);
   } catch (error) {
     next(error);
   }

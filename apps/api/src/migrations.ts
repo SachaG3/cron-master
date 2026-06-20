@@ -176,6 +176,22 @@ const migrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS api_tokens_active_idx ON api_tokens(revoked_at, created_at DESC);
     `,
   },
+  {
+    id: 7,
+    name: "deadman_enhancements",
+    sql: `
+      ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+      ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT 'critical';
+      ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS reminder_minutes INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS notify_on_missing BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS notify_on_recovery BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS missing_since TIMESTAMPTZ;
+      ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS last_notification_at TIMESTAMPTZ;
+      ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+      CREATE INDEX IF NOT EXISTS deadman_checks_enabled_status_idx ON deadman_checks(enabled, status);
+    `,
+  },
 ];
 
 export async function runMigrations() {

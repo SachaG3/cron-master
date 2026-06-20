@@ -59,7 +59,7 @@ Le pipeline GitHub Actions `.github/workflows/ci.yml` reprend ces étapes et lan
 19. Tags par job
 20. Sévérité `info`, `warning`, `critical`
 21. Dashboard de santé
-22. Dead-man switch avec URL de ping
+22. Dead-man switch avec URL de ping secrète, rotation, test et rappels
 23. Page de status JSON publique
 24. Fenêtres de maintenance
 25. Credentials centralisés

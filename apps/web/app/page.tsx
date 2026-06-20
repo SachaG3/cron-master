@@ -106,7 +106,24 @@ type NotificationSettings = {
 
 type Template = { id: string; name: string; description: string; job: { type: string; config: Record<string, unknown> } };
 type Incident = { id: string; title: string; severity: string; status: string; opened_at: string; muted_until?: string | null; escalated_at?: string | null; last_message: string };
-type Deadman = { id: string; name: string; slug: string; expected_interval_minutes: number; grace_minutes: number; status: string; last_ping_at: string | null };
+type Deadman = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  expected_interval_minutes: number;
+  grace_minutes: number;
+  severity: "info" | "warning" | "critical";
+  reminder_minutes: number;
+  notify_on_missing: boolean;
+  notify_on_recovery: boolean;
+  enabled: boolean;
+  status: string;
+  last_ping_at: string | null;
+  missing_since: string | null;
+  next_expected_at: string;
+  missing_after_at: string;
+};
 type Credential = { id: string; name: string; type: string; created_at: string };
 type Maintenance = { id: string; name: string; starts_at: string; ends_at: string; enabled: boolean };
 type Dashboard = { activeJobs: number; openIncidents: number; missingDeadmen: number; runs24h: { total: number; success: number; failure: number } };
@@ -346,7 +363,14 @@ export default function Home() {
   const [retryDelaySeconds, setRetryDelaySeconds] = useState(10);
   const [blocks, setBlocks] = useState<BlockStep[]>(defaultBlocks);
   const [deadmanName, setDeadmanName] = useState("Backup quotidien");
-  const [deadmanSlug, setDeadmanSlug] = useState("backup-daily");
+  const [deadmanDescription, setDeadmanDescription] = useState("Le backup doit ping Cron Master après chaque exécution.");
+  const [deadmanSlug, setDeadmanSlug] = useState("");
+  const [deadmanExpectedIntervalMinutes, setDeadmanExpectedIntervalMinutes] = useState(1440);
+  const [deadmanGraceMinutes, setDeadmanGraceMinutes] = useState(60);
+  const [deadmanSeverity, setDeadmanSeverity] = useState<"info" | "warning" | "critical">("critical");
+  const [deadmanReminderMinutes, setDeadmanReminderMinutes] = useState(0);
+  const [deadmanNotifyOnMissing, setDeadmanNotifyOnMissing] = useState(true);
+  const [deadmanNotifyOnRecovery, setDeadmanNotifyOnRecovery] = useState(true);
   const [credentialName, setCredentialName] = useState("Webhook prod");
   const [credentialType, setCredentialType] = useState("webhook");
   const [credentialValue, setCredentialValue] = useState("{\"webhookUrl\":\"https://example.com/webhook\"}");
@@ -644,7 +668,11 @@ export default function Home() {
   function applyTemplate(template: Template) {
     if (template.id === "deadman") {
       setDeadmanName(template.name);
-      setDeadmanSlug("backup-daily");
+      setDeadmanDescription(template.description);
+      setDeadmanSlug("");
+      setDeadmanExpectedIntervalMinutes(Number(template.job.config.expectedIntervalMinutes || 1440));
+      setDeadmanGraceMinutes(Number(template.job.config.graceMinutes || 60));
+      setDeadmanSeverity(String(template.job.config.severity || "critical") as "info" | "warning" | "critical");
       setActiveView("ops");
       setComposerOpen(false);
       return;
@@ -780,12 +808,53 @@ export default function Home() {
     }
   }
 
+  function deadmanPingPath(deadman: Deadman) {
+    return `${API_URL}/ping/${deadman.slug}`;
+  }
+
+  function copyDeadmanPingUrl(deadman: Deadman) {
+    const origin = typeof window === "undefined" ? "" : window.location.origin;
+    navigator.clipboard.writeText(`${origin}${deadmanPingPath(deadman)}`);
+  }
+
   async function createDeadman() {
     await api("/deadman", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: deadmanName, slug: deadmanSlug, expectedIntervalMinutes: 1440, graceMinutes: 60, enabled: true }),
+      body: JSON.stringify({
+        name: deadmanName,
+        description: deadmanDescription,
+        slug: deadmanSlug.trim() || undefined,
+        expectedIntervalMinutes: deadmanExpectedIntervalMinutes,
+        graceMinutes: deadmanGraceMinutes,
+        severity: deadmanSeverity,
+        reminderMinutes: deadmanReminderMinutes,
+        notifyOnMissing: deadmanNotifyOnMissing,
+        notifyOnRecovery: deadmanNotifyOnRecovery,
+        enabled: true,
+      }),
     });
+    setDeadmanSlug("");
+    await refresh();
+  }
+
+  async function pingDeadmanNow(id: string) {
+    await api(`/deadman/${id}/ping`, { method: "POST" });
+    await refresh();
+  }
+
+  async function rotateDeadman(id: string) {
+    await api(`/deadman/${id}/rotate`, { method: "POST" });
+    await refresh();
+  }
+
+  async function toggleDeadman(deadman: Deadman) {
+    await api(`/deadman/${deadman.id}/${deadman.enabled ? "pause" : "resume"}`, { method: "POST" });
+    await refresh();
+  }
+
+  async function deleteDeadmanItem(id: string) {
+    await api(`/deadman/${id}`, { method: "DELETE" });
     await refresh();
   }
 
@@ -1541,20 +1610,87 @@ export default function Home() {
               <div className="space-y-4">
                 <HelpText>Automations regroupe les fonctions d'intégration: tâches externes qui pingent l'app, credentials, maintenances et import/export.</HelpText>
                 <div className="grid gap-4 lg:grid-cols-3">
-                <Card className="p-4">
-                  <SectionTitle icon={ShieldAlert} title="Dead-man" />
-                  <p className="mt-2 text-sm text-muted-foreground">Surveille une tâche externe qui doit appeler une URL régulièrement.</p>
-                  <div className="mt-3 grid gap-2">
-                    <Input value={deadmanName} onChange={(event) => setDeadmanName(event.target.value)} />
-                    <Input value={deadmanSlug} onChange={(event) => setDeadmanSlug(event.target.value)} />
-                    <Button type="button" onClick={createDeadman}><Plus className="h-4 w-4" />Créer ping</Button>
+                <Card className="p-4 lg:col-span-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <SectionTitle icon={ShieldAlert} title="Dead-man" />
+                      <p className="mt-2 text-sm text-muted-foreground">Surveille une tâche externe qui doit pinguer Cron Master avant l'échéance.</p>
+                    </div>
+                    <Badge tone={deadmen.some((deadman) => deadman.status === "missing") ? "bad" : "ok"}>
+                      {deadmen.filter((deadman) => deadman.status === "missing").length} manquant(s)
+                    </Badge>
                   </div>
-                  <div className="mt-3 space-y-2">
-                    {deadmen.slice(0, 4).map((deadman) => (
-                      <p key={deadman.id} className="rounded-md border p-2 text-sm">
-                        {deadman.name} · {deadman.status}
-                        <span className="mt-1 block break-all text-xs text-muted-foreground">{API_URL}/ping/{deadman.slug}</span>
-                      </p>
+
+                  <div className="mt-4 grid gap-3 rounded-lg border bg-muted/40 p-3">
+                    <div className="grid gap-2 md:grid-cols-[1fr_1fr]">
+                      <Input placeholder="Nom" value={deadmanName} onChange={(event) => setDeadmanName(event.target.value)} />
+                      <Input placeholder="Slug optionnel, sinon généré" value={deadmanSlug} onChange={(event) => setDeadmanSlug(event.target.value)} />
+                    </div>
+                    <Input placeholder="Description" value={deadmanDescription} onChange={(event) => setDeadmanDescription(event.target.value)} />
+                    <div className="grid gap-2 md:grid-cols-4">
+                      <div className="grid gap-1">
+                        <Label>Intervalle attendu, min</Label>
+                        <Input type="number" min={1} max={10080} value={deadmanExpectedIntervalMinutes} onChange={(event) => setDeadmanExpectedIntervalMinutes(Number(event.target.value))} />
+                      </div>
+                      <div className="grid gap-1">
+                        <Label>Grâce, min</Label>
+                        <Input type="number" min={0} max={10080} value={deadmanGraceMinutes} onChange={(event) => setDeadmanGraceMinutes(Number(event.target.value))} />
+                      </div>
+                      <div className="grid gap-1">
+                        <Label>Rappel panne, min</Label>
+                        <Input type="number" min={0} max={10080} value={deadmanReminderMinutes} onChange={(event) => setDeadmanReminderMinutes(Number(event.target.value))} />
+                      </div>
+                      <div className="grid gap-1">
+                        <Label>Sévérité</Label>
+                        <select className={selectClassName()} value={deadmanSeverity} onChange={(event) => setDeadmanSeverity(event.target.value as "info" | "warning" | "critical")}>
+                          <option value="critical">critical</option>
+                          <option value="warning">warning</option>
+                          <option value="info">info</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+                      <label className="flex items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm">
+                        <input type="checkbox" checked={deadmanNotifyOnMissing} onChange={(event) => setDeadmanNotifyOnMissing(event.target.checked)} />
+                        Notifier quand le ping manque
+                      </label>
+                      <label className="flex items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm">
+                        <input type="checkbox" checked={deadmanNotifyOnRecovery} onChange={(event) => setDeadmanNotifyOnRecovery(event.target.checked)} />
+                        Notifier au retour du ping
+                      </label>
+                      <Button type="button" onClick={createDeadman}><Plus className="h-4 w-4" />Créer</Button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 xl:grid-cols-2">
+                    {deadmen.map((deadman) => (
+                      <div key={deadman.id} className={cx("rounded-lg border p-3", !deadman.enabled && "bg-muted/40")}>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-medium">{deadman.name}</p>
+                              <Badge tone={deadman.status === "missing" ? "bad" : deadman.status === "ok" ? "ok" : "warn"}>{deadman.status}</Badge>
+                              <Badge tone={deadman.severity === "critical" ? "bad" : deadman.severity === "info" ? "info" : "warn"}>{deadman.severity}</Badge>
+                              {!deadman.enabled && <Badge>pause</Badge>}
+                            </div>
+                            {deadman.description && <p className="mt-1 text-xs text-muted-foreground">{deadman.description}</p>}
+                            <p className="mt-2 break-all rounded-md border bg-muted/30 px-2 py-1 font-mono text-xs text-muted-foreground">{deadmanPingPath(deadman)}</p>
+                            <p className="mt-2 text-xs text-muted-foreground">
+                              Dernier ping: {formatDate(deadman.last_ping_at)} · attendu: {formatDate(deadman.next_expected_at)} · missing après: {formatDate(deadman.missing_after_at)}
+                            </p>
+                            {deadman.missing_since && <p className="mt-1 text-xs text-destructive">Manquant depuis {formatDate(deadman.missing_since)}</p>}
+                          </div>
+                          <div className="flex flex-wrap gap-2 sm:justify-end">
+                            <Button type="button" size="icon" variant="outline" title="Copier URL" onClick={() => copyDeadmanPingUrl(deadman)}><Copy className="h-4 w-4" /></Button>
+                            <Button type="button" size="icon" variant="outline" title="Tester ping" onClick={() => pingDeadmanNow(deadman.id)}><Play className="h-4 w-4" /></Button>
+                            <Button type="button" size="icon" variant="outline" title={deadman.enabled ? "Mettre en pause" : "Reprendre"} onClick={() => toggleDeadman(deadman)}>
+                              {deadman.enabled ? <PauseCircle className="h-4 w-4" /> : <PlayCircle className="h-4 w-4" />}
+                            </Button>
+                            <Button type="button" size="icon" variant="outline" title="Regénérer URL" onClick={() => rotateDeadman(deadman.id)}><RefreshCw className="h-4 w-4" /></Button>
+                            <Button type="button" size="icon" variant="destructive" title="Supprimer" onClick={() => deleteDeadmanItem(deadman.id)}><Trash2 className="h-4 w-4" /></Button>
+                          </div>
+                        </div>
+                      </div>
                     ))}
                     {deadmen.length === 0 && <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">Aucun ping externe configuré.</p>}
                   </div>

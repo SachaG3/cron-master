@@ -277,13 +277,26 @@ Variables disponibles:
 
 ### Dead-man switch
 
-Un dead-man surveille une tâche externe. La tâche doit appeler une URL régulièrement. Si Cron Master ne reçoit plus de ping dans le délai attendu, il ouvre un incident.
+Un dead-man surveille une tâche externe. La tâche doit appeler une URL régulièrement. Si Cron Master ne reçoit plus de ping avant `intervalle attendu + grâce`, il ouvre un incident.
+
+À la création, Cron Master peut générer une URL secrète automatiquement. C'est le mode recommandé: le slug n'est pas exposé dans le status public, il peut être copié depuis l'interface, testé manuellement, mis en pause ou régénéré si l'URL a fuité.
 
 Exemple d'appel:
 
 ```bash
-curl http://localhost:4000/ping/backup-daily
+curl http://localhost:4000/ping/dm-<slug-secret>
 ```
+
+Réglages utiles:
+
+| Champ | Description |
+| --- | --- |
+| Intervalle attendu | Délai normal entre deux pings |
+| Grâce | Marge avant ouverture d'incident |
+| Rappel panne | Répète une notification pendant l'incident, `0` pour désactiver |
+| Notification missing | Envoie une alerte quand le ping manque |
+| Notification recovery | Envoie une alerte quand le ping revient |
+| Rotation URL | Génère un nouveau slug et invalide l'ancienne URL |
 
 ### Maintenance
 
@@ -400,7 +413,8 @@ curl -X POST http://localhost:4000/api/v1/jobs \
 1. Crée un dead-man dans Automations.
 2. Copie l'URL de ping.
 3. Appelle l'URL à la fin du backup.
-4. Ajuste le délai attendu et la marge.
+4. Ajuste le délai attendu, la marge et les rappels.
+5. Utilise le bouton de test pour valider le ping depuis l'interface.
 
 ## Dépannage
 

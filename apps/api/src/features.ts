@@ -20,11 +20,18 @@ export const maintenanceSchema = z.object({
 
 export const deadmanSchema = z.object({
   name: z.string().min(1),
-  slug: z.string().min(2).regex(/^[a-z0-9-]+$/),
-  expectedIntervalMinutes: z.number().min(1).default(60),
-  graceMinutes: z.number().min(0).default(10),
+  description: z.string().optional().default(""),
+  slug: z.string().trim().min(2).regex(/^[a-z0-9-]+$/).optional().or(z.literal("")),
+  expectedIntervalMinutes: z.number().int().min(1).max(10080).default(60),
+  graceMinutes: z.number().int().min(0).max(10080).default(10),
+  severity: z.enum(["info", "warning", "critical"]).default("critical"),
+  reminderMinutes: z.number().int().min(0).max(10080).default(0),
+  notifyOnMissing: z.boolean().default(true),
+  notifyOnRecovery: z.boolean().default(true),
   enabled: z.boolean().default(true),
 });
+
+export const deadmanUpdateSchema = deadmanSchema.omit({ slug: true }).partial();
 
 const credentialsSecret = process.env.CREDENTIALS_SECRET ?? process.env.SESSION_SECRET ?? "cron-master-dev-credentials-secret";
 const credentialsKey = createHash("sha256").update(credentialsSecret).digest();
@@ -156,13 +163,29 @@ export async function ensureProductTables() {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
       slug TEXT NOT NULL UNIQUE,
+      description TEXT NOT NULL DEFAULT '',
       expected_interval_minutes INTEGER NOT NULL DEFAULT 60,
       grace_minutes INTEGER NOT NULL DEFAULT 10,
+      severity TEXT NOT NULL DEFAULT 'critical',
+      reminder_minutes INTEGER NOT NULL DEFAULT 0,
+      notify_on_missing BOOLEAN NOT NULL DEFAULT TRUE,
+      notify_on_recovery BOOLEAN NOT NULL DEFAULT TRUE,
       enabled BOOLEAN NOT NULL DEFAULT TRUE,
       last_ping_at TIMESTAMPTZ,
       status TEXT NOT NULL DEFAULT 'pending',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      missing_since TIMESTAMPTZ,
+      last_notification_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+    ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT 'critical';
+    ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS reminder_minutes INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS notify_on_missing BOOLEAN NOT NULL DEFAULT TRUE;
+    ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS notify_on_recovery BOOLEAN NOT NULL DEFAULT TRUE;
+    ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS missing_since TIMESTAMPTZ;
+    ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS last_notification_at TIMESTAMPTZ;
+    ALTER TABLE deadman_checks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
     CREATE TABLE IF NOT EXISTS api_tokens (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -180,6 +203,7 @@ export async function ensureProductTables() {
     CREATE INDEX IF NOT EXISTS incidents_status_idx ON incidents(status, opened_at DESC);
     CREATE INDEX IF NOT EXISTS maintenance_active_idx ON maintenance_windows(enabled, starts_at, ends_at);
     CREATE INDEX IF NOT EXISTS api_tokens_active_idx ON api_tokens(revoked_at, created_at DESC);
+    CREATE INDEX IF NOT EXISTS deadman_checks_enabled_status_idx ON deadman_checks(enabled, status);
   `);
 }
 
@@ -342,19 +366,157 @@ export async function recordJobOutcome(job: Job, result: { status: "success" | "
   return { incident: null };
 }
 
+type DeadmanRow = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  expected_interval_minutes: number;
+  grace_minutes: number;
+  severity: string;
+  reminder_minutes: number;
+  notify_on_missing: boolean;
+  notify_on_recovery: boolean;
+  enabled: boolean;
+  last_ping_at: Date | null;
+  status: string;
+  missing_since: Date | null;
+  last_notification_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+  next_expected_at: Date;
+  missing_after_at: Date;
+};
+
+const deadmanSelect = `
+  SELECT *,
+    COALESCE(last_ping_at, created_at) + (expected_interval_minutes * interval '1 minute') AS next_expected_at,
+    COALESCE(last_ping_at, created_at) + ((expected_interval_minutes + grace_minutes) * interval '1 minute') AS missing_after_at
+  FROM deadman_checks
+`;
+
+function generateDeadmanSlug() {
+  return `dm-${randomBytes(18).toString("hex")}`;
+}
+
+function formatDuration(ms: number) {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+export function shouldNotifyDeadmanMissing(input: {
+  wasMissing: boolean;
+  notifyOnMissing: boolean;
+  reminderMinutes: number;
+  lastNotificationAt?: Date | string | null;
+  now?: Date;
+}) {
+  if (!input.notifyOnMissing) return false;
+  if (!input.wasMissing) return true;
+  if (input.reminderMinutes <= 0) return false;
+  const lastNotificationAt = input.lastNotificationAt ? new Date(input.lastNotificationAt).getTime() : 0;
+  return !lastNotificationAt || (input.now ?? new Date()).getTime() - lastNotificationAt >= input.reminderMinutes * 60_000;
+}
+
 export async function listDeadmen() {
-  const result = await pool.query("SELECT * FROM deadman_checks ORDER BY created_at DESC");
+  const result = await pool.query<DeadmanRow>(`${deadmanSelect} ORDER BY created_at DESC`);
   return result.rows;
 }
 
 export async function createDeadman(input: unknown) {
   const deadman = deadmanSchema.parse(input);
-  const result = await pool.query(
-    `INSERT INTO deadman_checks (name, slug, expected_interval_minutes, grace_minutes, enabled)
-     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [deadman.name, deadman.slug, deadman.expectedIntervalMinutes, deadman.graceMinutes, deadman.enabled],
+  const slug = deadman.slug || generateDeadmanSlug();
+  const result = await pool.query<DeadmanRow>(
+    `INSERT INTO deadman_checks
+      (name, slug, description, expected_interval_minutes, grace_minutes, severity, reminder_minutes, notify_on_missing, notify_on_recovery, enabled)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING *,
+       COALESCE(last_ping_at, created_at) + (expected_interval_minutes * interval '1 minute') AS next_expected_at,
+       COALESCE(last_ping_at, created_at) + ((expected_interval_minutes + grace_minutes) * interval '1 minute') AS missing_after_at`,
+    [
+      deadman.name,
+      slug,
+      deadman.description,
+      deadman.expectedIntervalMinutes,
+      deadman.graceMinutes,
+      deadman.severity,
+      deadman.reminderMinutes,
+      deadman.notifyOnMissing,
+      deadman.notifyOnRecovery,
+      deadman.enabled,
+    ],
   );
   return result.rows[0];
+}
+
+export async function updateDeadman(id: string, input: unknown) {
+  const current = await pool.query<DeadmanRow>(`${deadmanSelect} WHERE id = $1`, [id]);
+  const row = current.rows[0];
+  if (!row) return null;
+
+  const deadman = deadmanUpdateSchema.parse(input);
+  const result = await pool.query<DeadmanRow>(
+    `UPDATE deadman_checks
+     SET name = $1,
+         description = $2,
+         expected_interval_minutes = $3,
+         grace_minutes = $4,
+         severity = $5,
+         reminder_minutes = $6,
+         notify_on_missing = $7,
+         notify_on_recovery = $8,
+         enabled = $9,
+         status = CASE WHEN $9::boolean = false THEN status ELSE status END,
+         updated_at = now()
+     WHERE id = $10
+     RETURNING *,
+       COALESCE(last_ping_at, created_at) + (expected_interval_minutes * interval '1 minute') AS next_expected_at,
+       COALESCE(last_ping_at, created_at) + ((expected_interval_minutes + grace_minutes) * interval '1 minute') AS missing_after_at`,
+    [
+      deadman.name ?? row.name,
+      deadman.description ?? row.description,
+      deadman.expectedIntervalMinutes ?? row.expected_interval_minutes,
+      deadman.graceMinutes ?? row.grace_minutes,
+      deadman.severity ?? row.severity,
+      deadman.reminderMinutes ?? row.reminder_minutes,
+      deadman.notifyOnMissing ?? row.notify_on_missing,
+      deadman.notifyOnRecovery ?? row.notify_on_recovery,
+      deadman.enabled ?? row.enabled,
+      id,
+    ],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function setDeadmanEnabled(id: string, enabled: boolean) {
+  const result = await pool.query<DeadmanRow>(
+    `UPDATE deadman_checks
+     SET enabled = $1, updated_at = now()
+     WHERE id = $2
+     RETURNING *,
+       COALESCE(last_ping_at, created_at) + (expected_interval_minutes * interval '1 minute') AS next_expected_at,
+       COALESCE(last_ping_at, created_at) + ((expected_interval_minutes + grace_minutes) * interval '1 minute') AS missing_after_at`,
+    [enabled, id],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function rotateDeadmanSlug(id: string) {
+  const result = await pool.query<DeadmanRow>(
+    `UPDATE deadman_checks
+     SET slug = $1, updated_at = now()
+     WHERE id = $2
+     RETURNING *,
+       COALESCE(last_ping_at, created_at) + (expected_interval_minutes * interval '1 minute') AS next_expected_at,
+       COALESCE(last_ping_at, created_at) + ((expected_interval_minutes + grace_minutes) * interval '1 minute') AS missing_after_at`,
+    [generateDeadmanSlug(), id],
+  );
+  return result.rows[0] ?? null;
 }
 
 export async function deleteDeadman(id: string) {
@@ -362,44 +524,88 @@ export async function deleteDeadman(id: string) {
 }
 
 export async function pingDeadman(slug: string) {
+  const current = await pool.query<DeadmanRow>("SELECT * FROM deadman_checks WHERE slug = $1", [slug]);
+  const previous = current.rows[0];
+  if (!previous) return null;
+
   const result = await pool.query(
-    "UPDATE deadman_checks SET last_ping_at = now(), status = 'ok' WHERE slug = $1 RETURNING *",
+    `UPDATE deadman_checks
+     SET last_ping_at = now(),
+         status = 'ok',
+         missing_since = NULL,
+         updated_at = now()
+     WHERE slug = $1
+     RETURNING *,
+       COALESCE(last_ping_at, created_at) + (expected_interval_minutes * interval '1 minute') AS next_expected_at,
+       COALESCE(last_ping_at, created_at) + ((expected_interval_minutes + grace_minutes) * interval '1 minute') AS missing_after_at`,
     [slug],
   );
-  if (result.rows[0]) {
-    await pool.query(
-      "UPDATE incidents SET status = 'resolved', resolved_at = now() WHERE deadman_id = $1 AND status = 'open'",
-      [result.rows[0].id],
-    );
+  const deadman = result.rows[0] ?? null;
+
+  if (deadman && previous.status === "missing") {
+    await pool.query("UPDATE incidents SET status = 'resolved', resolved_at = now() WHERE deadman_id = $1 AND status = 'open'", [deadman.id]);
+    if (previous.notify_on_recovery) {
+      const duration = previous.missing_since ? ` apres ${formatDuration(Date.now() - new Date(previous.missing_since).getTime())}` : "";
+      await sendNotifications(await getNotificationSettings(), `${deadman.name}: ping retabli${duration}`);
+    }
   }
-  return result.rows[0] ?? null;
+
+  return deadman;
+}
+
+export async function pingDeadmanById(id: string) {
+  const result = await pool.query<{ slug: string }>("SELECT slug FROM deadman_checks WHERE id = $1", [id]);
+  return result.rows[0] ? await pingDeadman(result.rows[0].slug) : null;
 }
 
 export async function checkDeadmen() {
-  const result = await pool.query(
+  const result = await pool.query<DeadmanRow>(
     `SELECT * FROM deadman_checks
      WHERE enabled = true
-       AND (
-         last_ping_at IS NULL
-         OR last_ping_at + ((expected_interval_minutes + grace_minutes) * interval '1 minute') < now()
-       )`,
+       AND COALESCE(last_ping_at, created_at) + ((expected_interval_minutes + grace_minutes) * interval '1 minute') < now()
+     ORDER BY COALESCE(missing_since, created_at) ASC`,
   );
 
+  const incidents = [];
+  const settings = result.rows.length > 0 ? await getNotificationSettings() : null;
+
   for (const deadman of result.rows) {
-    await pool.query("UPDATE deadman_checks SET status = 'missing' WHERE id = $1", [deadman.id]);
+    const wasMissing = deadman.status === "missing";
+    const missingSince = deadman.missing_since ?? new Date();
+    await pool.query(
+      `UPDATE deadman_checks
+       SET status = 'missing',
+           missing_since = COALESCE(missing_since, now()),
+           updated_at = now()
+       WHERE id = $1`,
+      [deadman.id],
+    );
     const incident = await openIncident({
       deadmanId: deadman.id,
       title: deadman.name,
-      severity: "critical",
+      severity: deadman.severity,
       message: "Ping attendu non recu",
-      details: { slug: deadman.slug, lastPingAt: deadman.last_ping_at },
+      details: {
+        lastPingAt: deadman.last_ping_at,
+        expectedIntervalMinutes: deadman.expected_interval_minutes,
+        graceMinutes: deadman.grace_minutes,
+        missingSince,
+      },
     });
-    const settings = await getNotificationSettings();
-    if (settings.notifyOnFailure) {
+    incidents.push(incident);
+
+    if (settings?.notifyOnFailure && shouldNotifyDeadmanMissing({
+      wasMissing,
+      notifyOnMissing: deadman.notify_on_missing,
+      reminderMinutes: deadman.reminder_minutes,
+      lastNotificationAt: deadman.last_notification_at,
+    })) {
       await sendNotifications(settings, `${deadman.name}: ping attendu non recu`);
+      await pool.query("UPDATE deadman_checks SET last_notification_at = now(), updated_at = now() WHERE id = $1", [deadman.id]);
     }
-    return incident;
   }
+
+  return incidents;
 }
 
 export async function getDashboard() {
@@ -428,7 +634,13 @@ export async function getPublicStatus() {
   const [jobs, incidents, deadmen] = await Promise.all([
     pool.query("SELECT id, name, type, enabled, last_run_at FROM jobs ORDER BY name"),
     pool.query("SELECT title, severity, opened_at, last_message FROM incidents WHERE status = 'open' ORDER BY opened_at DESC"),
-    pool.query("SELECT name, slug, status, last_ping_at FROM deadman_checks ORDER BY name"),
+    pool.query(
+      `SELECT name, status, last_ping_at,
+              COALESCE(last_ping_at, created_at) + (expected_interval_minutes * interval '1 minute') AS next_expected_at,
+              COALESCE(last_ping_at, created_at) + ((expected_interval_minutes + grace_minutes) * interval '1 minute') AS missing_after_at
+       FROM deadman_checks
+       ORDER BY name`,
+    ),
   ]);
   return {
     status: (incidents.rowCount ?? 0) > 0 || deadmen.rows.some((row) => row.status === "missing") ? "degraded" : "ok",
@@ -480,7 +692,12 @@ export async function exportData() {
     pool.query("SELECT * FROM jobs ORDER BY created_at"),
     pool.query("SELECT name, type, true AS redacted FROM credentials ORDER BY created_at"),
     pool.query("SELECT name, job_id, starts_at, ends_at, enabled FROM maintenance_windows ORDER BY created_at"),
-    pool.query("SELECT name, slug, expected_interval_minutes, grace_minutes, enabled FROM deadman_checks ORDER BY created_at"),
+    pool.query(
+      `SELECT name, slug, description, expected_interval_minutes, grace_minutes, severity,
+              reminder_minutes, notify_on_missing, notify_on_recovery, enabled
+       FROM deadman_checks
+       ORDER BY created_at`,
+    ),
   ]);
   return {
     exportedAt: new Date().toISOString(),
@@ -491,7 +708,7 @@ export async function exportData() {
   };
 }
 
-export function validateImportData(data: { jobs?: Job[] }) {
+export function validateImportData(data: { jobs?: Job[]; deadmen?: Array<Record<string, unknown>> }) {
   const errors: string[] = [];
   for (const [index, job] of (data.jobs ?? []).entries()) {
     if (!job.name) errors.push(`jobs[${index}].name manquant`);
@@ -499,14 +716,18 @@ export function validateImportData(data: { jobs?: Job[] }) {
     if (!["cron", "once"].includes(job.schedule_type)) errors.push(`jobs[${index}].schedule_type invalide`);
     if (job.schedule_type === "cron" && !job.cron_expression) errors.push(`jobs[${index}].cron_expression manquant`);
   }
+  for (const [index, deadman] of (data.deadmen ?? []).entries()) {
+    if (typeof deadman.name !== "string" || !deadman.name.trim()) errors.push(`deadmen[${index}].name manquant`);
+    if (typeof deadman.slug === "string" && deadman.slug && !/^[a-z0-9-]+$/.test(deadman.slug)) errors.push(`deadmen[${index}].slug invalide`);
+  }
   return {
     ok: errors.length === 0,
     errors,
-    counts: { jobs: data.jobs?.length ?? 0 },
+    counts: { jobs: data.jobs?.length ?? 0, deadmen: data.deadmen?.length ?? 0 },
   };
 }
 
-export async function importData(data: { jobs?: Job[] }) {
+export async function importData(data: { jobs?: Job[]; deadmen?: Array<Record<string, unknown>> }) {
   const validation = validateImportData(data);
   if (!validation.ok) {
     throw new Error(`Import invalide: ${validation.errors.join(", ")}`);
@@ -532,5 +753,23 @@ export async function importData(data: { jobs?: Job[] }) {
     );
     importedJobs += 1;
   }
-  return { importedJobs };
+
+  let importedDeadmen = 0;
+  for (const deadman of data.deadmen ?? []) {
+    await createDeadman({
+      name: deadman.name,
+      slug: deadman.slug,
+      description: deadman.description,
+      expectedIntervalMinutes: deadman.expected_interval_minutes ?? deadman.expectedIntervalMinutes,
+      graceMinutes: deadman.grace_minutes ?? deadman.graceMinutes,
+      severity: deadman.severity,
+      reminderMinutes: deadman.reminder_minutes ?? deadman.reminderMinutes,
+      notifyOnMissing: deadman.notify_on_missing ?? deadman.notifyOnMissing,
+      notifyOnRecovery: deadman.notify_on_recovery ?? deadman.notifyOnRecovery,
+      enabled: deadman.enabled,
+    });
+    importedDeadmen += 1;
+  }
+
+  return { importedJobs, importedDeadmen };
 }
