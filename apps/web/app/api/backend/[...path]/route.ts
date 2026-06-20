@@ -2,6 +2,23 @@ import { NextRequest } from "next/server";
 
 const API_URL = (process.env.API_URL ?? "http://localhost:4000").replace(/\/$/, "");
 
+function responseHeadersFromBackend(response: Response) {
+  const headers = new Headers(response.headers);
+  const backendHeaders = response.headers as Headers & { getSetCookie?: () => string[] };
+  const setCookies = backendHeaders.getSetCookie?.() ?? [];
+
+  headers.delete("content-encoding");
+  headers.delete("content-length");
+  headers.delete("transfer-encoding");
+  headers.delete("set-cookie");
+
+  for (const cookie of setCookies) {
+    headers.append("set-cookie", cookie);
+  }
+
+  return headers;
+}
+
 async function proxy(request: NextRequest, context: { params: Promise<{ path?: string[] }> }) {
   const { path = [] } = await context.params;
   const target = new URL(`${API_URL}/${path.map(encodeURIComponent).join("/")}`);
@@ -18,15 +35,10 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path?: s
     redirect: "manual",
   });
 
-  const responseHeaders = new Headers(response.headers);
-  responseHeaders.delete("content-encoding");
-  responseHeaders.delete("content-length");
-  responseHeaders.delete("transfer-encoding");
-
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
-    headers: responseHeaders,
+    headers: responseHeadersFromBackend(response),
   });
 }
 

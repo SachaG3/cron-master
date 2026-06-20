@@ -113,6 +113,17 @@ async function createSession(userId: string, res: Response) {
   setSessionCookie(res, token);
 }
 
+async function createSessionWithClient(client: Pick<typeof pool, "query">, userId: string) {
+  const token = randomBytes(32).toString("base64url");
+  await client.query("DELETE FROM admin_sessions WHERE expires_at <= now()");
+  await client.query(
+    `INSERT INTO admin_sessions (user_id, token_hash, expires_at)
+     VALUES ($1, $2, now() + ($3::int * interval '1 day'))`,
+    [userId, hashToken(token), sessionTtlDays],
+  );
+  return token;
+}
+
 async function findUserFromRequest(req: Request) {
   const token = parseCookies(req.headers.cookie).get(sessionCookieName);
   if (!token) return null;
@@ -132,7 +143,7 @@ async function adminCount() {
   return result.rows[0]?.count ?? 0;
 }
 
-async function createInitialAdmin(email: string, passwordHash: string) {
+async function createInitialAdminSession(email: string, passwordHash: string) {
   const client = await pool.connect();
 
   try {
@@ -149,8 +160,11 @@ async function createInitialAdmin(email: string, passwordHash: string) {
       "INSERT INTO admin_users (email, password_hash) VALUES ($1, $2) RETURNING id, email",
       [email, passwordHash],
     );
+    const user = result.rows[0];
+    const token = await createSessionWithClient(client, user.id);
+
     await client.query("COMMIT");
-    return result.rows[0];
+    return { user, token };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -194,11 +208,11 @@ authRouter.post("/register", async (req, res, next) => {
   try {
     const input = authInputSchema.parse(req.body);
     const passwordHash = await hashPassword(input.password);
-    const user = await createInitialAdmin(input.email, passwordHash);
-    if (!user) return res.status(409).json({ error: "Un compte administrateur existe deja" });
+    const session = await createInitialAdminSession(input.email, passwordHash);
+    if (!session) return res.status(409).json({ error: "Un compte administrateur existe deja" });
 
-    await createSession(user.id, res);
-    res.status(201).json({ user });
+    setSessionCookie(res, session.token);
+    res.status(201).json({ user: session.user });
   } catch (error) {
     const message = authErrorMessage(error);
     if (message) return res.status(400).json({ error: message });
