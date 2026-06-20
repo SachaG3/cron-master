@@ -35,6 +35,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { AuthPanel } from "./auth-panel";
 
 type JobType = "notification" | "date_reminder" | "website_check" | "machine_check" | "network_monitor" | "script";
 type ScheduleType = "cron" | "once";
@@ -249,8 +250,6 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [needsSetup, setNeedsSetup] = useState(false);
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [logJobId, setLogJobId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<"dashboard" | "jobs" | "incidents" | "ops" | "settings" | "docs">("dashboard");
@@ -350,6 +349,7 @@ export default function Home() {
         return;
       }
       const setupResponse = await fetch(`${API_URL}/auth/setup-status`, { credentials: "include" });
+      if (!setupResponse.ok) throw new Error(await readError(setupResponse));
       const setupData = (await setupResponse.json()) as { needsSetup: boolean };
       setNeedsSetup(setupData.needsSetup);
       setAuthUser(null);
@@ -360,23 +360,19 @@ export default function Home() {
     }
   }
 
-  async function submitAuth(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function submitAuth({ email, password }: { email: string; password: string }) {
     setError("");
     const response = await fetch(`${API_URL}/auth/${needsSetup ? "register" : "login"}`, {
       method: "POST",
       credentials: "include",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: authEmail, password: authPassword }),
+      body: JSON.stringify({ email, password }),
     });
-    if (!response.ok) {
-      setError(await readError(response));
-      return;
-    }
+    if (!response.ok) throw new Error(await readError(response));
+
     const data = (await response.json()) as { user: AuthUser };
     setAuthUser(data.user);
     setNeedsSetup(false);
-    setAuthPassword("");
   }
 
   async function logout() {
@@ -683,42 +679,7 @@ export default function Home() {
 
   const schedule = buildSchedule();
 
-  if (authLoading) {
-    return (
-      <main className="grid min-h-screen place-items-center bg-background px-4">
-        <Card className="w-full max-w-sm p-5">
-          <p className="text-sm font-medium">Chargement de la session...</p>
-        </Card>
-      </main>
-    );
-  }
-
-  if (!authUser) {
-    return (
-      <main className="grid min-h-screen place-items-center bg-background px-4">
-        <Card className="w-full max-w-sm p-5">
-          <div className="mb-5">
-            <h1 className="text-xl font-semibold">{needsSetup ? "Créer le compte admin" : "Connexion"}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {needsSetup ? "Ce premier compte protegera l'interface d'administration." : "Connecte-toi pour gerer les jobs et les alertes."}
-            </p>
-          </div>
-          {error && <p className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-          <form onSubmit={submitAuth} className="grid gap-3">
-            <div className="grid gap-1">
-              <Label>Email</Label>
-              <Input type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} required />
-            </div>
-            <div className="grid gap-1">
-              <Label>Mot de passe</Label>
-              <Input type="password" minLength={8} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} required />
-            </div>
-            <Button type="submit">{needsSetup ? "Créer le compte" : "Se connecter"}</Button>
-          </form>
-        </Card>
-      </main>
-    );
-  }
+  if (authLoading || !authUser) return <AuthPanel error={error} loading={authLoading} needsSetup={needsSetup} onSubmit={submitAuth} />;
 
   return (
     <main className="min-h-screen bg-background">
