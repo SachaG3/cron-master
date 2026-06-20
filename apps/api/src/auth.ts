@@ -1,14 +1,17 @@
-import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
+import connectPgSimple from "connect-pg-simple";
 import { NextFunction, Request, Response, Router } from "express";
+import session from "express-session";
 import { z } from "zod";
 import { pool } from "./db.js";
 
 const scrypt = promisify(scryptCallback);
+const PgSessionStore = connectPgSimple(session);
 const sessionCookieName = "cron_master_session";
-const sessionTtlDays = 30;
+const sessionTtlMs = 30 * 24 * 60 * 60 * 1000;
 
-const authInputSchema = z.object({
+const credentialsSchema = z.object({
   email: z.string().trim().email("Email invalide").transform((email) => email.toLowerCase()),
   password: z.string().min(8, "Le mot de passe doit contenir au moins 8 caracteres").max(256),
 });
@@ -18,6 +21,12 @@ type AdminUser = {
   email: string;
 };
 
+declare module "express-session" {
+  interface SessionData {
+    adminUserId?: string;
+  }
+}
+
 declare global {
   namespace Express {
     interface Request {
@@ -25,6 +34,25 @@ declare global {
     }
   }
 }
+
+export const sessionMiddleware = session({
+  name: sessionCookieName,
+  secret: process.env.SESSION_SECRET ?? "cron-master-dev-session-secret-change-me",
+  resave: false,
+  saveUninitialized: false,
+  store: new PgSessionStore({
+    pool,
+    tableName: "session",
+    createTableIfMissing: true,
+  }),
+  cookie: {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.SESSION_COOKIE_SECURE === "true",
+    maxAge: sessionTtlMs,
+    path: "/",
+  },
+});
 
 export async function ensureAuthTables() {
   await pool.query(`
@@ -35,15 +63,14 @@ export async function ensureAuthTables() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
-    CREATE TABLE IF NOT EXISTS admin_sessions (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id UUID NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
-      token_hash TEXT NOT NULL UNIQUE,
-      expires_at TIMESTAMPTZ NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    CREATE TABLE IF NOT EXISTS "session" (
+      sid VARCHAR NOT NULL PRIMARY KEY,
+      sess JSON NOT NULL,
+      expire TIMESTAMP(6) NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS admin_sessions_expires_idx ON admin_sessions(expires_at);
+    CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" (expire);
+    DROP TABLE IF EXISTS admin_sessions;
   `);
 }
 
@@ -56,85 +83,48 @@ async function hashPassword(password: string) {
 async function verifyPassword(password: string, stored: string) {
   const [scheme, salt, hash] = stored.split(":");
   if (scheme !== "scrypt" || !salt || !hash) return false;
+
   const expected = Buffer.from(hash, "hex");
   const actual = (await scrypt(password, salt, expected.length)) as Buffer;
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-function authErrorMessage(error: unknown) {
-  if (error instanceof z.ZodError) {
-    return error.issues[0]?.message ?? "Identifiants invalides";
-  }
+function validationMessage(error: unknown) {
+  if (error instanceof z.ZodError) return error.issues[0]?.message ?? "Identifiants invalides";
   return null;
 }
 
-function hashToken(token: string) {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-function parseCookies(header: string | undefined) {
-  const cookies = new Map<string, string>();
-  for (const part of (header ?? "").split(";")) {
-    const index = part.indexOf("=");
-    if (index === -1) continue;
-    cookies.set(part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim()));
-  }
-  return cookies;
-}
-
-function setSessionCookie(res: Response, token: string) {
-  const maxAge = sessionTtlDays * 24 * 60 * 60;
-  res.cookie(sessionCookieName, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    maxAge: maxAge * 1000,
-    path: "/",
+function saveSession(req: Request) {
+  return new Promise<void>((resolve, reject) => {
+    req.session.save((error) => (error ? reject(error) : resolve()));
   });
 }
 
-function clearSessionCookie(res: Response) {
-  res.clearCookie(sessionCookieName, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
+function regenerateSession(req: Request) {
+  return new Promise<void>((resolve, reject) => {
+    req.session.regenerate((error) => (error ? reject(error) : resolve()));
   });
 }
 
-async function createSession(userId: string, res: Response) {
-  const token = randomBytes(32).toString("base64url");
-  await pool.query("DELETE FROM admin_sessions WHERE expires_at <= now()");
-  await pool.query(
-    `INSERT INTO admin_sessions (user_id, token_hash, expires_at)
-     VALUES ($1, $2, now() + ($3::int * interval '1 day'))`,
-    [userId, hashToken(token), sessionTtlDays],
-  );
-  setSessionCookie(res, token);
+function destroySession(req: Request) {
+  return new Promise<void>((resolve, reject) => {
+    req.session.destroy((error) => (error ? reject(error) : resolve()));
+  });
 }
 
-async function createSessionWithClient(client: Pick<typeof pool, "query">, userId: string) {
-  const token = randomBytes(32).toString("base64url");
-  await client.query("DELETE FROM admin_sessions WHERE expires_at <= now()");
-  await client.query(
-    `INSERT INTO admin_sessions (user_id, token_hash, expires_at)
-     VALUES ($1, $2, now() + ($3::int * interval '1 day'))`,
-    [userId, hashToken(token), sessionTtlDays],
-  );
-  return token;
+async function signIn(req: Request, userId: string) {
+  await regenerateSession(req);
+  req.session.adminUserId = userId;
+  await saveSession(req);
 }
 
-async function findUserFromRequest(req: Request) {
-  const token = parseCookies(req.headers.cookie).get(sessionCookieName);
-  if (!token) return null;
-  const result = await pool.query<AdminUser>(
-    `SELECT u.id, u.email
-     FROM admin_sessions s
-     JOIN admin_users u ON u.id = s.user_id
-     WHERE s.token_hash = $1 AND s.expires_at > now()
-     LIMIT 1`,
-    [hashToken(token)],
-  );
+async function findUserById(id: string) {
+  const result = await pool.query<AdminUser>("SELECT id, email FROM admin_users WHERE id = $1 LIMIT 1", [id]);
+  return result.rows[0] ?? null;
+}
+
+async function findUserByEmail(email: string) {
+  const result = await pool.query<AdminUser & { password_hash: string }>("SELECT id, email, password_hash FROM admin_users WHERE email = $1 LIMIT 1", [email]);
   return result.rows[0] ?? null;
 }
 
@@ -143,7 +133,7 @@ async function adminCount() {
   return result.rows[0]?.count ?? 0;
 }
 
-async function createInitialAdminSession(email: string, passwordHash: string) {
+async function createInitialAdmin(email: string, passwordHash: string) {
   const client = await pool.connect();
 
   try {
@@ -160,11 +150,8 @@ async function createInitialAdminSession(email: string, passwordHash: string) {
       "INSERT INTO admin_users (email, password_hash) VALUES ($1, $2) RETURNING id, email",
       [email, passwordHash],
     );
-    const user = result.rows[0];
-    const token = await createSessionWithClient(client, user.id);
-
     await client.query("COMMIT");
-    return { user, token };
+    return result.rows[0];
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -175,8 +162,11 @@ async function createInitialAdminSession(email: string, passwordHash: string) {
 
 export async function requireAdminSession(req: Request, res: Response, next: NextFunction) {
   try {
-    const user = await findUserFromRequest(req);
+    const userId = req.session.adminUserId;
+    const user = userId ? await findUserById(userId) : null;
+
     if (!user) return res.status(401).json({ error: "Connexion requise" });
+
     req.adminUser = user;
     next();
   } catch (error) {
@@ -196,8 +186,11 @@ authRouter.get("/setup-status", async (_req, res, next) => {
 
 authRouter.get("/me", async (req, res, next) => {
   try {
-    const user = await findUserFromRequest(req);
+    const userId = req.session.adminUserId;
+    const user = userId ? await findUserById(userId) : null;
+
     if (!user) return res.status(401).json({ error: "Connexion requise" });
+
     res.json({ user });
   } catch (error) {
     next(error);
@@ -206,15 +199,21 @@ authRouter.get("/me", async (req, res, next) => {
 
 authRouter.post("/register", async (req, res, next) => {
   try {
-    const input = authInputSchema.parse(req.body);
-    const passwordHash = await hashPassword(input.password);
-    const session = await createInitialAdminSession(input.email, passwordHash);
-    if (!session) return res.status(409).json({ error: "Un compte administrateur existe deja" });
+    const input = credentialsSchema.parse(req.body);
+    const user = await createInitialAdmin(input.email, await hashPassword(input.password));
 
-    setSessionCookie(res, session.token);
-    res.status(201).json({ user: session.user });
+    if (!user) return res.status(409).json({ error: "Un compte administrateur existe deja" });
+
+    try {
+      await signIn(req, user.id);
+    } catch (error) {
+      await pool.query("DELETE FROM admin_users WHERE id = $1", [user.id]).catch(() => undefined);
+      throw error;
+    }
+
+    res.status(201).json({ user });
   } catch (error) {
-    const message = authErrorMessage(error);
+    const message = validationMessage(error);
     if (message) return res.status(400).json({ error: message });
     next(error);
   }
@@ -222,19 +221,17 @@ authRouter.post("/register", async (req, res, next) => {
 
 authRouter.post("/login", async (req, res, next) => {
   try {
-    const input = authInputSchema.parse(req.body);
-    const result = await pool.query<AdminUser & { password_hash: string }>(
-      "SELECT id, email, password_hash FROM admin_users WHERE email = $1",
-      [input.email],
-    );
-    const user = result.rows[0];
+    const input = credentialsSchema.parse(req.body);
+    const user = await findUserByEmail(input.email);
+
     if (!user || !(await verifyPassword(input.password, user.password_hash))) {
       return res.status(401).json({ error: "Identifiants invalides" });
     }
-    await createSession(user.id, res);
+
+    await signIn(req, user.id);
     res.json({ user: { id: user.id, email: user.email } });
   } catch (error) {
-    const message = authErrorMessage(error);
+    const message = validationMessage(error);
     if (message) return res.status(400).json({ error: message });
     next(error);
   }
@@ -242,9 +239,8 @@ authRouter.post("/login", async (req, res, next) => {
 
 authRouter.post("/logout", async (req, res, next) => {
   try {
-    const token = parseCookies(req.headers.cookie).get(sessionCookieName);
-    if (token) await pool.query("DELETE FROM admin_sessions WHERE token_hash = $1", [hashToken(token)]);
-    clearSessionCookie(res);
+    await destroySession(req);
+    res.clearCookie(sessionCookieName, { path: "/" });
     res.status(204).end();
   } catch (error) {
     next(error);

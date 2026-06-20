@@ -1,7 +1,7 @@
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
-import { authRouter, ensureAuthTables, requireAdminSession } from "./auth.js";
+import { authRouter, ensureAuthTables, requireAdminSession, sessionMiddleware } from "./auth.js";
 import { createJob, deleteJob, duplicateJob, getJob, jobInputSchema, listJobs, listRuns, setJobEnabled, updateJob } from "./jobs.js";
 import { ensureCoreTables } from "./migrations.js";
 import { sendNotifications } from "./notify.js";
@@ -32,6 +32,7 @@ import { publicApiRouter } from "./publicApi.js";
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
 
+app.set("trust proxy", 1);
 app.use(
   cors({
     origin: true,
@@ -39,6 +40,7 @@ app.use(
   }),
 );
 app.use(express.json({ limit: "256kb" }));
+app.use(sessionMiddleware);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
