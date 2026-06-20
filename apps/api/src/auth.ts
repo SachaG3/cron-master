@@ -9,8 +9,8 @@ const sessionCookieName = "cron_master_session";
 const sessionTtlDays = 30;
 
 const authInputSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8).max(256),
+  email: z.string().trim().email("Email invalide").transform((email) => email.toLowerCase()),
+  password: z.string().min(8, "Le mot de passe doit contenir au moins 8 caracteres").max(256),
 });
 
 type AdminUser = {
@@ -61,6 +61,13 @@ async function verifyPassword(password: string, stored: string) {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
+function authErrorMessage(error: unknown) {
+  if (error instanceof z.ZodError) {
+    return error.issues[0]?.message ?? "Identifiants invalides";
+  }
+  return null;
+}
+
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -97,6 +104,7 @@ function clearSessionCookie(res: Response) {
 
 async function createSession(userId: string, res: Response) {
   const token = randomBytes(32).toString("base64url");
+  await pool.query("DELETE FROM admin_sessions WHERE expires_at <= now()");
   await pool.query(
     `INSERT INTO admin_sessions (user_id, token_hash, expires_at)
      VALUES ($1, $2, now() + ($3::int * interval '1 day'))`,
@@ -157,18 +165,39 @@ authRouter.get("/me", async (req, res, next) => {
 
 authRouter.post("/register", async (req, res, next) => {
   try {
-    if ((await adminCount()) > 0) {
-      return res.status(409).json({ error: "Un compte administrateur existe deja" });
-    }
     const input = authInputSchema.parse(req.body);
     const passwordHash = await hashPassword(input.password);
-    const result = await pool.query<AdminUser>(
-      "INSERT INTO admin_users (email, password_hash) VALUES ($1, $2) RETURNING id, email",
-      [input.email.toLowerCase(), passwordHash],
-    );
-    await createSession(result.rows[0].id, res);
-    res.status(201).json({ user: result.rows[0] });
+    const client = await pool.connect();
+    let user: AdminUser;
+
+    try {
+      await client.query("BEGIN");
+      await client.query("LOCK TABLE admin_users IN EXCLUSIVE MODE");
+
+      const countResult = await client.query<{ count: number }>("SELECT count(*)::int AS count FROM admin_users");
+      if ((countResult.rows[0]?.count ?? 0) > 0) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "Un compte administrateur existe deja" });
+      }
+
+      const result = await client.query<AdminUser>(
+        "INSERT INTO admin_users (email, password_hash) VALUES ($1, $2) RETURNING id, email",
+        [input.email, passwordHash],
+      );
+      user = result.rows[0];
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    await createSession(user.id, res);
+    res.status(201).json({ user });
   } catch (error) {
+    const message = authErrorMessage(error);
+    if (message) return res.status(400).json({ error: message });
     next(error);
   }
 });
@@ -178,7 +207,7 @@ authRouter.post("/login", async (req, res, next) => {
     const input = authInputSchema.parse(req.body);
     const result = await pool.query<AdminUser & { password_hash: string }>(
       "SELECT id, email, password_hash FROM admin_users WHERE email = $1",
-      [input.email.toLowerCase()],
+      [input.email],
     );
     const user = result.rows[0];
     if (!user || !(await verifyPassword(input.password, user.password_hash))) {
@@ -187,6 +216,8 @@ authRouter.post("/login", async (req, res, next) => {
     await createSession(user.id, res);
     res.json({ user: { id: user.id, email: user.email } });
   } catch (error) {
+    const message = authErrorMessage(error);
+    if (message) return res.status(400).json({ error: message });
     next(error);
   }
 });

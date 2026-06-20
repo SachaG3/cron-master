@@ -251,6 +251,8 @@ export default function Home() {
   const [needsSetup, setNeedsSetup] = useState(false);
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [authPasswordConfirm, setAuthPasswordConfirm] = useState("");
+  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [logJobId, setLogJobId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<"dashboard" | "jobs" | "incidents" | "ops" | "settings" | "docs">("dashboard");
@@ -350,6 +352,7 @@ export default function Home() {
         return;
       }
       const setupResponse = await fetch(`${API_URL}/auth/setup-status`, { credentials: "include" });
+      if (!setupResponse.ok) throw new Error(await readError(setupResponse));
       const setupData = (await setupResponse.json()) as { needsSetup: boolean };
       setNeedsSetup(setupData.needsSetup);
       setAuthUser(null);
@@ -363,20 +366,36 @@ export default function Home() {
   async function submitAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
-    const response = await fetch(`${API_URL}/auth/${needsSetup ? "register" : "login"}`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: authEmail, password: authPassword }),
-    });
-    if (!response.ok) {
-      setError(await readError(response));
+    const email = authEmail.trim();
+
+    if (needsSetup && authPassword !== authPasswordConfirm) {
+      setError("Les deux mots de passe ne correspondent pas");
       return;
     }
-    const data = (await response.json()) as { user: AuthUser };
-    setAuthUser(data.user);
-    setNeedsSetup(false);
-    setAuthPassword("");
+
+    setAuthSubmitting(true);
+    try {
+      const response = await fetch(`${API_URL}/auth/${needsSetup ? "register" : "login"}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password: authPassword }),
+      });
+      if (!response.ok) {
+        setError(await readError(response));
+        return;
+      }
+      const data = (await response.json()) as { user: AuthUser };
+      setAuthUser(data.user);
+      setNeedsSetup(false);
+      setAuthEmail(data.user.email);
+      setAuthPassword("");
+      setAuthPasswordConfirm("");
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : String(authError));
+    } finally {
+      setAuthSubmitting(false);
+    }
   }
 
   async function logout() {
@@ -706,14 +725,50 @@ export default function Home() {
           {error && <p className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
           <form onSubmit={submitAuth} className="grid gap-3">
             <div className="grid gap-1">
-              <Label>Email</Label>
-              <Input type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} required />
+              <Label htmlFor="auth-email">Email</Label>
+              <Input
+                id="auth-email"
+                type="email"
+                autoComplete="email"
+                value={authEmail}
+                onChange={(event) => setAuthEmail(event.target.value)}
+                disabled={authSubmitting}
+                required
+              />
             </div>
             <div className="grid gap-1">
-              <Label>Mot de passe</Label>
-              <Input type="password" minLength={8} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} required />
+              <Label htmlFor="auth-password">Mot de passe</Label>
+              <Input
+                id="auth-password"
+                type="password"
+                minLength={8}
+                maxLength={256}
+                autoComplete={needsSetup ? "new-password" : "current-password"}
+                value={authPassword}
+                onChange={(event) => setAuthPassword(event.target.value)}
+                disabled={authSubmitting}
+                required
+              />
             </div>
-            <Button type="submit">{needsSetup ? "Créer le compte" : "Se connecter"}</Button>
+            {needsSetup && (
+              <div className="grid gap-1">
+                <Label htmlFor="auth-password-confirm">Confirmer le mot de passe</Label>
+                <Input
+                  id="auth-password-confirm"
+                  type="password"
+                  minLength={8}
+                  maxLength={256}
+                  autoComplete="new-password"
+                  value={authPasswordConfirm}
+                  onChange={(event) => setAuthPasswordConfirm(event.target.value)}
+                  disabled={authSubmitting}
+                  required
+                />
+              </div>
+            )}
+            <Button type="submit" disabled={authSubmitting}>
+              {authSubmitting ? "Envoi..." : needsSetup ? "Créer le compte" : "Se connecter"}
+            </Button>
           </form>
         </Card>
       </main>
