@@ -11,7 +11,6 @@ const sessionTtlDays = 30;
 const authInputSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8).max(256),
-  setupToken: z.string().optional(),
 });
 
 type AdminUser = {
@@ -125,16 +124,6 @@ async function adminCount() {
   return result.rows[0]?.count ?? 0;
 }
 
-function setupTokenState() {
-  const configuredToken = process.env.CRON_MASTER_SETUP_TOKEN?.trim() || "";
-  const required = process.env.NODE_ENV === "production" || configuredToken.length > 0;
-  return {
-    configuredToken,
-    required,
-    configured: configuredToken.length > 0,
-  };
-}
-
 export async function requireAdminSession(req: Request, res: Response, next: NextFunction) {
   try {
     const user = await findUserFromRequest(req);
@@ -150,13 +139,7 @@ export const authRouter = Router();
 
 authRouter.get("/setup-status", async (_req, res, next) => {
   try {
-    const needsSetup = (await adminCount()) === 0;
-    const token = setupTokenState();
-    res.json({
-      needsSetup,
-      setupTokenRequired: needsSetup && token.required,
-      setupBlocked: needsSetup && token.required && !token.configured,
-    });
+    res.json({ needsSetup: (await adminCount()) === 0 });
   } catch (error) {
     next(error);
   }
@@ -178,13 +161,6 @@ authRouter.post("/register", async (req, res, next) => {
       return res.status(409).json({ error: "Un compte administrateur existe deja" });
     }
     const input = authInputSchema.parse(req.body);
-    const token = setupTokenState();
-    if (token.required && !token.configured) {
-      return res.status(503).json({ error: "CRON_MASTER_SETUP_TOKEN doit etre configure avant la creation du compte admin" });
-    }
-    if (token.required && input.setupToken !== token.configuredToken) {
-      return res.status(401).json({ error: "Token de setup invalide" });
-    }
     const passwordHash = await hashPassword(input.password);
     const result = await pool.query<AdminUser>(
       "INSERT INTO admin_users (email, password_hash) VALUES ($1, $2) RETURNING id, email",

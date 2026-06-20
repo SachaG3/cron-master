@@ -12,7 +12,7 @@ docker compose up --build
 - API: http://localhost:4000/health
 - API publique: http://localhost:4000/api/v1
 
-La clé d'API Docker Compose par défaut est `change-me-dev-key`. Le token de création du premier compte admin en local est `change-me-dev-setup-token`. Change-les en production avec `CRON_MASTER_API_KEY` et `CRON_MASTER_SETUP_TOKEN`.
+La clé d'API Docker Compose par défaut est `change-me-dev-key`. Change-la en production avec `CRON_MASTER_API_KEY`.
 
 Guide complet: [`docs/CRON_MASTER_GUIDE.md`](docs/CRON_MASTER_GUIDE.md)
 

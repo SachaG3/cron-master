@@ -97,7 +97,6 @@ jobs:
           POSTGRES_USER=cronmaster
           POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
           CRON_MASTER_API_KEY=${{ secrets.CRON_MASTER_API_KEY }}
-          CRON_MASTER_SETUP_TOKEN=${{ secrets.CRON_MASTER_SETUP_TOKEN }}
           DEFAULT_NTFY_SERVER=https://ntfy.sh
           API_IMAGE=${{ needs.build-push.outputs.api_image }}:${{ needs.build-push.outputs.tag }}
           WEB_IMAGE=${{ needs.build-push.outputs.web_image }}:${{ needs.build-push.outputs.tag }}

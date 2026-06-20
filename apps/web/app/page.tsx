@@ -249,11 +249,8 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [needsSetup, setNeedsSetup] = useState(false);
-  const [setupTokenRequired, setSetupTokenRequired] = useState(false);
-  const [setupBlocked, setSetupBlocked] = useState(false);
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
-  const [setupToken, setSetupToken] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [logJobId, setLogJobId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<"dashboard" | "jobs" | "incidents" | "ops" | "settings" | "docs">("dashboard");
@@ -353,10 +350,8 @@ export default function Home() {
         return;
       }
       const setupResponse = await fetch(`${API_URL}/auth/setup-status`, { credentials: "include" });
-      const setupData = (await setupResponse.json()) as { needsSetup: boolean; setupTokenRequired?: boolean; setupBlocked?: boolean };
+      const setupData = (await setupResponse.json()) as { needsSetup: boolean };
       setNeedsSetup(setupData.needsSetup);
-      setSetupTokenRequired(setupData.setupTokenRequired === true);
-      setSetupBlocked(setupData.setupBlocked === true);
       setAuthUser(null);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : String(authError));
@@ -372,7 +367,7 @@ export default function Home() {
       method: "POST",
       credentials: "include",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: authEmail, password: authPassword, setupToken: setupToken || undefined }),
+      body: JSON.stringify({ email: authEmail, password: authPassword }),
     });
     if (!response.ok) {
       setError(await readError(response));
@@ -382,7 +377,6 @@ export default function Home() {
     setAuthUser(data.user);
     setNeedsSetup(false);
     setAuthPassword("");
-    setSetupToken("");
   }
 
   async function logout() {
@@ -710,11 +704,6 @@ export default function Home() {
             </p>
           </div>
           {error && <p className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-          {setupBlocked && (
-            <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              Configure CRON_MASTER_SETUP_TOKEN cote serveur avant de creer le premier compte.
-            </p>
-          )}
           <form onSubmit={submitAuth} className="grid gap-3">
             <div className="grid gap-1">
               <Label>Email</Label>
@@ -724,13 +713,7 @@ export default function Home() {
               <Label>Mot de passe</Label>
               <Input type="password" minLength={8} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} required />
             </div>
-            {needsSetup && setupTokenRequired && (
-              <div className="grid gap-1">
-                <Label>Token de setup</Label>
-                <Input type="password" value={setupToken} onChange={(event) => setSetupToken(event.target.value)} required />
-              </div>
-            )}
-            <Button type="submit" disabled={setupBlocked}>{needsSetup ? "Créer le compte" : "Se connecter"}</Button>
+            <Button type="submit">{needsSetup ? "Créer le compte" : "Se connecter"}</Button>
           </form>
         </Card>
       </main>
