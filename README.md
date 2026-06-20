@@ -69,6 +69,15 @@ Le pipeline GitHub Actions `.github/workflows/ci.yml` reprend ces étapes et lan
 29. Anti-spam par incident unique
 30. Seuil de temps de réponse HTTP
 31. Fallback texte pour anciens scripts
+32. Sessions serveur Express stockées dans PostgreSQL
+33. Migrations SQL versionnées
+34. Dry-run de job sans sauvegarde
+35. Webhooks signés par HMAC optionnel
+36. Status public HTML
+37. Notifications Slack, Telegram, Gotify, webhook générique et email SMTP
+38. Credentials chiffrés
+39. Mute et escalade d'incidents
+40. Historique 7 jours et pagination API
 
 Le mode blocs permet d'ajouter: notification, test de site, test machine, attente, webhook sortant et condition.
 
@@ -107,6 +116,9 @@ Endpoints principaux:
 - `DELETE /api/v1/jobs/:id`: supprimer un job
 - `POST /api/v1/jobs/:id/run`: lancer un job maintenant
 - `POST /api/v1/jobs/:id/webhook`: déclencher un job avec un payload externe
+- `POST /api/v1/jobs/test`: tester un payload de job sans le sauvegarder
+- `GET /api/v1/stats/runs`: lire les stats journalières des runs
+- `GET /api/v1/openapi.json`: récupérer la description OpenAPI
 - `POST /api/v1/jobs/:id/duplicate`: dupliquer un job en pause
 - `POST /api/v1/jobs/:id/pause`: mettre un job en pause
 - `POST /api/v1/jobs/:id/resume`: reprendre un job

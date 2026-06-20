@@ -1,3 +1,4 @@
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { pool, Job } from "./db.js";
 import { sendNotifications } from "./notify.js";
@@ -24,6 +25,25 @@ export const deadmanSchema = z.object({
   graceMinutes: z.number().min(0).default(10),
   enabled: z.boolean().default(true),
 });
+
+const credentialsSecret = process.env.CREDENTIALS_SECRET ?? process.env.SESSION_SECRET ?? "cron-master-dev-credentials-secret";
+const credentialsKey = createHash("sha256").update(credentialsSecret).digest();
+
+function encryptCredential(value: Record<string, unknown>) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", credentialsKey, iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
+  return `${iv.toString("base64")}.${cipher.getAuthTag().toString("base64")}.${encrypted.toString("base64")}`;
+}
+
+function decryptCredential(value: string) {
+  const [ivValue, authTagValue, encryptedValue] = value.split(".");
+  if (!ivValue || !authTagValue || !encryptedValue) return {};
+  const decipher = createDecipheriv("aes-256-gcm", credentialsKey, Buffer.from(ivValue, "base64"));
+  decipher.setAuthTag(Buffer.from(authTagValue, "base64"));
+  const decrypted = Buffer.concat([decipher.update(Buffer.from(encryptedValue, "base64")), decipher.final()]).toString("utf8");
+  return JSON.parse(decrypted) as Record<string, unknown>;
+}
 
 export const templates = [
   {
@@ -100,8 +120,10 @@ export async function ensureProductTables() {
       name TEXT NOT NULL,
       type TEXT NOT NULL,
       value JSONB NOT NULL DEFAULT '{}'::jsonb,
+      encrypted_value TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE credentials ADD COLUMN IF NOT EXISTS encrypted_value TEXT;
 
     CREATE TABLE IF NOT EXISTS maintenance_windows (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -122,9 +144,13 @@ export async function ensureProductTables() {
       status TEXT NOT NULL DEFAULT 'open',
       opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       resolved_at TIMESTAMPTZ,
+      muted_until TIMESTAMPTZ,
+      escalated_at TIMESTAMPTZ,
       last_message TEXT NOT NULL DEFAULT '',
       details JSONB NOT NULL DEFAULT '{}'::jsonb
     );
+    ALTER TABLE incidents ADD COLUMN IF NOT EXISTS muted_until TIMESTAMPTZ;
+    ALTER TABLE incidents ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS deadman_checks (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -151,10 +177,17 @@ export async function listCredentials() {
 export async function createCredential(input: unknown) {
   const credential = credentialSchema.parse(input);
   const result = await pool.query(
-    "INSERT INTO credentials (name, type, value) VALUES ($1, $2, $3) RETURNING id, name, type, created_at",
-    [credential.name, credential.type, credential.value],
+    "INSERT INTO credentials (name, type, value, encrypted_value) VALUES ($1, $2, $3, $4) RETURNING id, name, type, created_at",
+    [credential.name, credential.type, { redacted: true }, encryptCredential(credential.value)],
   );
   return result.rows[0];
+}
+
+export async function getCredentialValue(id: string) {
+  const result = await pool.query<{ value: Record<string, unknown>; encrypted_value: string | null }>("SELECT value, encrypted_value FROM credentials WHERE id = $1", [id]);
+  const row = result.rows[0];
+  if (!row) return {};
+  return row.encrypted_value ? decryptCredential(row.encrypted_value) : row.value;
 }
 
 export async function deleteCredential(id: string) {
@@ -163,6 +196,16 @@ export async function deleteCredential(id: string) {
 
 export async function listMaintenance() {
   const result = await pool.query("SELECT * FROM maintenance_windows ORDER BY starts_at DESC LIMIT 100");
+  return result.rows;
+}
+
+export async function listMaintenanceCalendar() {
+  const result = await pool.query(
+    `SELECT id, name AS title, starts_at AS start, ends_at AS end, enabled, job_id
+     FROM maintenance_windows
+     ORDER BY starts_at ASC
+     LIMIT 500`,
+  );
   return result.rows;
 }
 
@@ -206,6 +249,14 @@ export async function resolveIncident(id: string) {
   return result.rows[0] ?? null;
 }
 
+export async function muteIncident(id: string, minutes: number) {
+  const result = await pool.query(
+    "UPDATE incidents SET muted_until = now() + ($2::int * interval '1 minute') WHERE id = $1 RETURNING *",
+    [id, Math.max(1, Math.min(10080, minutes))],
+  );
+  return result.rows[0] ?? null;
+}
+
 async function openIncident(input: {
   jobId?: string | null;
   deadmanId?: string | null;
@@ -213,6 +264,7 @@ async function openIncident(input: {
   severity?: string;
   message: string;
   details?: Record<string, unknown>;
+  escalateAfterMinutes?: number;
 }) {
   const existing = await pool.query(
     `SELECT * FROM incidents
@@ -222,10 +274,26 @@ async function openIncident(input: {
     [input.jobId ?? null, input.deadmanId ?? null],
   );
   if (existing.rows[0]) {
+    const current = existing.rows[0];
+    const mutedUntil = current.muted_until ? new Date(current.muted_until).getTime() : 0;
+    const escalateAfterMinutes = Math.max(0, Math.min(10080, input.escalateAfterMinutes ?? 0));
+    const shouldEscalate =
+      escalateAfterMinutes > 0 &&
+      !current.escalated_at &&
+      (!mutedUntil || mutedUntil <= Date.now()) &&
+      Date.now() - new Date(current.opened_at).getTime() >= escalateAfterMinutes * 60_000;
     const updated = await pool.query(
-      "UPDATE incidents SET last_message = $1, details = $2 WHERE id = $3 RETURNING *",
-      [input.message, input.details ?? {}, existing.rows[0].id],
+      `UPDATE incidents
+       SET last_message = $1,
+           details = $2,
+           escalated_at = CASE WHEN $4::boolean THEN now() ELSE escalated_at END
+       WHERE id = $3
+       RETURNING *`,
+      [input.message, input.details ?? {}, current.id, shouldEscalate],
     );
+    if (shouldEscalate) {
+      await sendNotifications(await getNotificationSettings(), `${input.title}: incident toujours ouvert (${input.message})`);
+    }
     return updated.rows[0];
   }
 
@@ -252,6 +320,7 @@ export async function recordJobOutcome(job: Job, result: { status: "success" | "
       severity: typeof job.config.severity === "string" ? job.config.severity : "warning",
       message: result.message,
       details: result.output,
+      escalateAfterMinutes: typeof job.config.escalateAfterMinutes === "number" ? job.config.escalateAfterMinutes : undefined,
     });
     return { incident };
   }
@@ -355,6 +424,43 @@ export async function getPublicStatus() {
   };
 }
 
+function escapeHtml(value: string) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+export async function getPublicStatusHtml() {
+  const status = await getPublicStatus();
+  const incidentItems = status.incidents
+    .map((incident) => `<li><strong>${escapeHtml(incident.title)}</strong> (${escapeHtml(incident.severity)}): ${escapeHtml(incident.last_message)}</li>`)
+    .join("");
+  const deadmanItems = status.deadmen
+    .map((deadman) => `<li><strong>${escapeHtml(deadman.name)}</strong>: ${escapeHtml(deadman.status)}${deadman.last_ping_at ? `, dernier ping ${escapeHtml(String(deadman.last_ping_at))}` : ""}</li>`)
+    .join("");
+
+  return `<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cron Master Status</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #111827; background: #f9fafb; }
+    main { max-width: 760px; margin: 0 auto; }
+    .badge { display: inline-block; padding: .35rem .55rem; border-radius: .35rem; background: ${status.status === "ok" ? "#dcfce7" : "#fee2e2"}; }
+    section { margin-top: 1.5rem; padding: 1rem; background: white; border: 1px solid #e5e7eb; border-radius: .5rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Cron Master Status</h1>
+    <p class="badge">${escapeHtml(status.status)}</p>
+    <section><h2>Incidents ouverts</h2><ul>${incidentItems || "<li>Aucun incident ouvert</li>"}</ul></section>
+    <section><h2>Dead-men</h2><ul>${deadmanItems || "<li>Aucun dead-man configure</li>"}</ul></section>
+  </main>
+</body>
+</html>`;
+}
+
 export async function exportData() {
   const [jobs, credentials, maintenance, deadmen] = await Promise.all([
     pool.query("SELECT * FROM jobs ORDER BY created_at"),
@@ -371,7 +477,27 @@ export async function exportData() {
   };
 }
 
+export function validateImportData(data: { jobs?: Job[] }) {
+  const errors: string[] = [];
+  for (const [index, job] of (data.jobs ?? []).entries()) {
+    if (!job.name) errors.push(`jobs[${index}].name manquant`);
+    if (!["notification", "date_reminder", "website_check", "machine_check", "network_monitor", "script"].includes(job.type)) errors.push(`jobs[${index}].type invalide`);
+    if (!["cron", "once"].includes(job.schedule_type)) errors.push(`jobs[${index}].schedule_type invalide`);
+    if (job.schedule_type === "cron" && !job.cron_expression) errors.push(`jobs[${index}].cron_expression manquant`);
+  }
+  return {
+    ok: errors.length === 0,
+    errors,
+    counts: { jobs: data.jobs?.length ?? 0 },
+  };
+}
+
 export async function importData(data: { jobs?: Job[] }) {
+  const validation = validateImportData(data);
+  if (!validation.ok) {
+    throw new Error(`Import invalide: ${validation.errors.join(", ")}`);
+  }
+
   let importedJobs = 0;
   for (const job of data.jobs ?? []) {
     await pool.query(

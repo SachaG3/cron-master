@@ -1,8 +1,11 @@
 import { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
+import { executeJob } from "./executor.js";
 import { createDeadman, getDashboard, getPublicStatus, pingDeadman, templates } from "./features.js";
-import { createJob, deleteJob, duplicateJob, getJob, jobInputSchema, listJobs, listRuns, setJobEnabled, updateJob } from "./jobs.js";
+import { buildTransientJob, createJob, deleteJob, duplicateJob, getJob, getRunStats, jobInputSchema, listJobs, listRuns, setJobEnabled, updateJob } from "./jobs.js";
+import { openApiDocument } from "./openapi.js";
 import { runJobNow } from "./worker.js";
+import { verifyWebhookSignature } from "./webhookSecurity.js";
 
 const scheduleSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("every_minutes"), value: z.number().min(1).max(59) }),
@@ -36,6 +39,29 @@ function toCron(input: z.infer<typeof scheduleSchema>) {
   return { scheduleType: "cron" as const, cronExpression: `${minute} ${hour} ${input.day} * *`, runAt: null, label: `Chaque mois à ${input.time}` };
 }
 
+function paginationFromQuery(req: Request) {
+  return {
+    limit: typeof req.query.limit === "string" ? Number(req.query.limit) : undefined,
+    offset: typeof req.query.offset === "string" ? Number(req.query.offset) : undefined,
+  };
+}
+
+function toJobInput(input: z.infer<typeof publicJobSchema>) {
+  const schedule = toCron(input.schedule);
+  const scheduleLabel = typeof input.config.scheduleLabel === "string" ? input.config.scheduleLabel : schedule.label;
+  return jobInputSchema.parse({
+    name: input.name,
+    description: input.description,
+    type: input.type,
+    scheduleType: schedule.scheduleType,
+    cronExpression: schedule.cronExpression,
+    runAt: schedule.runAt,
+    timezone: input.timezone,
+    enabled: input.enabled,
+    config: { ...input.config, scheduleLabel },
+  });
+}
+
 function requireApiKey(req: Request, res: Response, next: NextFunction) {
   const configuredKey = process.env.CRON_MASTER_API_KEY;
   if (!configuredKey) return next();
@@ -54,9 +80,22 @@ publicApiRouter.get("/health", (_req, res) => {
   res.json({ ok: true, version: "v1" });
 });
 
+publicApiRouter.get("/openapi.json", (_req, res) => {
+  res.json(openApiDocument);
+});
+
 publicApiRouter.get("/dashboard", async (_req, res, next) => {
   try {
     res.json(await getDashboard());
+  } catch (error) {
+    next(error);
+  }
+});
+
+publicApiRouter.get("/stats/runs", async (req, res, next) => {
+  try {
+    const days = typeof req.query.days === "string" ? Number(req.query.days) : undefined;
+    res.json(await getRunStats(days));
   } catch (error) {
     next(error);
   }
@@ -74,9 +113,9 @@ publicApiRouter.get("/templates", (_req, res) => {
   res.json(templates);
 });
 
-publicApiRouter.get("/jobs", async (_req, res, next) => {
+publicApiRouter.get("/jobs", async (req, res, next) => {
   try {
-    res.json(await listJobs());
+    res.json(await listJobs(paginationFromQuery(req)));
   } catch (error) {
     next(error);
   }
@@ -85,22 +124,17 @@ publicApiRouter.get("/jobs", async (_req, res, next) => {
 publicApiRouter.post("/jobs", async (req, res, next) => {
   try {
     const input = publicJobSchema.parse(req.body);
-    const schedule = toCron(input.schedule);
-    const scheduleLabel = typeof input.config.scheduleLabel === "string" ? input.config.scheduleLabel : schedule.label;
-    const job = await createJob(
-      jobInputSchema.parse({
-        name: input.name,
-        description: input.description,
-        type: input.type,
-        scheduleType: schedule.scheduleType,
-        cronExpression: schedule.cronExpression,
-        runAt: schedule.runAt,
-        timezone: input.timezone,
-        enabled: input.enabled,
-        config: { ...input.config, scheduleLabel },
-      }),
-    );
+    const job = await createJob(toJobInput(input));
     res.status(201).json(job);
+  } catch (error) {
+    next(error);
+  }
+});
+
+publicApiRouter.post("/jobs/test", async (req, res, next) => {
+  try {
+    const input = publicJobSchema.parse(req.body);
+    res.json(await executeJob(buildTransientJob(toJobInput(input))));
   } catch (error) {
     next(error);
   }
@@ -119,22 +153,7 @@ publicApiRouter.get("/jobs/:id", async (req, res, next) => {
 publicApiRouter.put("/jobs/:id", async (req, res, next) => {
   try {
     const input = publicJobSchema.parse(req.body);
-    const schedule = toCron(input.schedule);
-    const scheduleLabel = typeof input.config.scheduleLabel === "string" ? input.config.scheduleLabel : schedule.label;
-    const job = await updateJob(
-      req.params.id,
-      jobInputSchema.parse({
-        name: input.name,
-        description: input.description,
-        type: input.type,
-        scheduleType: schedule.scheduleType,
-        cronExpression: schedule.cronExpression,
-        runAt: schedule.runAt,
-        timezone: input.timezone,
-        enabled: input.enabled,
-        config: { ...input.config, scheduleLabel },
-      }),
-    );
+    const job = await updateJob(req.params.id, toJobInput(input));
     if (!job) return res.status(404).json({ error: "Job introuvable" });
     res.json(job);
   } catch (error) {
@@ -195,6 +214,7 @@ publicApiRouter.post("/jobs/:id/webhook", async (req, res, next) => {
   try {
     const job = await getJob(req.params.id);
     if (!job) return res.status(404).json({ error: "Job introuvable" });
+    if (!verifyWebhookSignature(req, job)) return res.status(401).json({ error: "Signature webhook invalide" });
     res.json(await runJobNow({ ...job, config: { ...job.config, webhookPayload: req.body } }, { preserveSchedule: true }));
   } catch (error) {
     next(error);
@@ -203,7 +223,7 @@ publicApiRouter.post("/jobs/:id/webhook", async (req, res, next) => {
 
 publicApiRouter.get("/jobs/:id/runs", async (req, res, next) => {
   try {
-    res.json(await listRuns(req.params.id));
+    res.json(await listRuns(req.params.id, paginationFromQuery(req)));
   } catch (error) {
     next(error);
   }

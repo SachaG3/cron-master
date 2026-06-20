@@ -1,11 +1,12 @@
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
-import { authRouter, ensureAuthTables, requireAdminSession, sessionMiddleware } from "./auth.js";
-import { createJob, deleteJob, duplicateJob, getJob, jobInputSchema, listJobs, listRuns, setJobEnabled, updateJob } from "./jobs.js";
-import { ensureCoreTables } from "./migrations.js";
+import { authRouter, requireAdminSession, sessionMiddleware } from "./auth.js";
+import { buildTransientJob, createJob, deleteJob, duplicateJob, getJob, getRunStats, jobInputSchema, listJobs, listRuns, setJobEnabled, updateJob } from "./jobs.js";
+import { runMigrations } from "./migrations.js";
 import { sendNotifications } from "./notify.js";
-import { ensureSettingsTable, getNotificationSettings, notificationSettingsSchema, updateNotificationSettings } from "./settings.js";
+import { executeJob } from "./executor.js";
+import { getNotificationSettings, notificationSettingsSchema, updateNotificationSettings } from "./settings.js";
 import { runJobNow, startWorker } from "./worker.js";
 import {
   createCredential,
@@ -14,20 +15,25 @@ import {
   deleteCredential,
   deleteDeadman,
   deleteMaintenance,
-  ensureProductTables,
   exportData,
   getDashboard,
   getPublicStatus,
+  getPublicStatusHtml,
   importData,
   listCredentials,
   listDeadmen,
   listIncidents,
   listMaintenance,
+  listMaintenanceCalendar,
+  muteIncident,
   pingDeadman,
   resolveIncident,
   templates,
+  validateImportData,
 } from "./features.js";
 import { publicApiRouter } from "./publicApi.js";
+import { openApiDocument } from "./openapi.js";
+import { verifyWebhookSignature } from "./webhookSecurity.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
@@ -39,15 +45,28 @@ app.use(
     credentials: true,
   }),
 );
-app.use(express.json({ limit: "256kb" }));
+app.use(express.json({ limit: "256kb", verify: (req, _res, buf) => {
+  (req as express.Request).rawBody = Buffer.from(buf);
+} }));
 app.use(sessionMiddleware);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+function paginationFromQuery(req: express.Request) {
+  return {
+    limit: typeof req.query.limit === "string" ? Number(req.query.limit) : undefined,
+    offset: typeof req.query.offset === "string" ? Number(req.query.offset) : undefined,
+  };
+}
+
 app.use("/api/v1", publicApiRouter);
 app.use("/auth", authRouter);
+
+app.get("/openapi.json", (_req, res) => {
+  res.json(openApiDocument);
+});
 
 app.all("/ping/:slug", async (req, res, next) => {
   try {
@@ -67,10 +86,19 @@ app.get("/status", async (_req, res, next) => {
   }
 });
 
+app.get("/status.html", async (_req, res, next) => {
+  try {
+    res.type("html").send(await getPublicStatusHtml());
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/webhooks/:id", async (req, res, next) => {
   try {
     const job = await getJob(req.params.id);
     if (!job) return res.status(404).json({ error: "Job introuvable" });
+    if (!verifyWebhookSignature(req, job)) return res.status(401).json({ error: "Signature webhook invalide" });
     res.json(await runJobNow({ ...job, config: { ...job.config, webhookPayload: req.body } }, { preserveSchedule: true }));
   } catch (error) {
     next(error);
@@ -113,6 +141,15 @@ app.get("/dashboard", async (_req, res, next) => {
   }
 });
 
+app.get("/stats/runs", async (req, res, next) => {
+  try {
+    const days = typeof req.query.days === "string" ? Number(req.query.days) : undefined;
+    res.json(await getRunStats(days));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/templates", (_req, res) => {
   res.json(templates);
 });
@@ -150,6 +187,14 @@ app.get("/maintenance", async (_req, res, next) => {
   }
 });
 
+app.get("/maintenance/calendar", async (_req, res, next) => {
+  try {
+    res.json(await listMaintenanceCalendar());
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/maintenance", async (req, res, next) => {
   try {
     res.status(201).json(await createMaintenance(req.body));
@@ -178,6 +223,17 @@ app.get("/incidents", async (_req, res, next) => {
 app.post("/incidents/:id/resolve", async (req, res, next) => {
   try {
     const incident = await resolveIncident(req.params.id);
+    if (!incident) return res.status(404).json({ error: "Incident introuvable" });
+    res.json(incident);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/incidents/:id/mute", async (req, res, next) => {
+  try {
+    const minutes = typeof req.body?.minutes === "number" ? req.body.minutes : 60;
+    const incident = await muteIncident(req.params.id, minutes);
     if (!incident) return res.status(404).json({ error: "Incident introuvable" });
     res.json(incident);
   } catch (error) {
@@ -228,6 +284,14 @@ app.get("/status", async (_req, res, next) => {
   }
 });
 
+app.get("/status.html", async (_req, res, next) => {
+  try {
+    res.type("html").send(await getPublicStatusHtml());
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/export", async (_req, res, next) => {
   try {
     res.json(await exportData());
@@ -244,9 +308,17 @@ app.post("/import", async (req, res, next) => {
   }
 });
 
-app.get("/jobs", async (_req, res, next) => {
+app.post("/import/validate", async (req, res, next) => {
   try {
-    res.json(await listJobs());
+    res.json(validateImportData(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/jobs", async (req, res, next) => {
+  try {
+    res.json(await listJobs(paginationFromQuery(req)));
   } catch (error) {
     next(error);
   }
@@ -256,6 +328,15 @@ app.post("/jobs", async (req, res, next) => {
   try {
     const input = jobInputSchema.parse(req.body);
     res.status(201).json(await createJob(input));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/jobs/test", async (req, res, next) => {
+  try {
+    const input = jobInputSchema.parse(req.body);
+    res.json(await executeJob(buildTransientJob(input)));
   } catch (error) {
     next(error);
   }
@@ -325,6 +406,7 @@ app.post("/webhooks/:id", async (req, res, next) => {
   try {
     const job = await getJob(req.params.id);
     if (!job) return res.status(404).json({ error: "Job introuvable" });
+    if (!verifyWebhookSignature(req, job)) return res.status(401).json({ error: "Signature webhook invalide" });
     res.json(await runJobNow({ ...job, config: { ...job.config, webhookPayload: req.body } }));
   } catch (error) {
     next(error);
@@ -334,7 +416,7 @@ app.post("/webhooks/:id", async (req, res, next) => {
 app.get("/runs", async (req, res, next) => {
   try {
     const jobId = typeof req.query.jobId === "string" ? req.query.jobId : undefined;
-    res.json(await listRuns(jobId));
+    res.json(await listRuns(jobId, paginationFromQuery(req)));
   } catch (error) {
     next(error);
   }
@@ -350,10 +432,7 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 
 app.listen(port, () => {
   console.log(`Cron Master API listening on :${port}`);
-  ensureCoreTables()
-    .then(() => ensureSettingsTable())
-    .then(() => ensureAuthTables())
-    .then(() => ensureProductTables())
+  runMigrations()
     .then(() => startWorker())
     .catch((error) => console.error("database migration failed", error));
 });

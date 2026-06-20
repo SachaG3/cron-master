@@ -3,9 +3,18 @@ import { pool } from "./db.js";
 
 export const notificationSettingsSchema = z.object({
   discordWebhookUrl: z.string().optional().default(""),
+  slackWebhookUrl: z.string().optional().default(""),
   ntfyServer: z.string().optional().default("https://ntfy.sh"),
   ntfyTopic: z.string().optional().default(""),
   ntfyToken: z.string().optional().default(""),
+  telegramBotToken: z.string().optional().default(""),
+  telegramChatId: z.string().optional().default(""),
+  gotifyUrl: z.string().optional().default(""),
+  gotifyToken: z.string().optional().default(""),
+  webhookUrl: z.string().optional().default(""),
+  emailSmtpUrl: z.string().optional().default(""),
+  emailFrom: z.string().optional().default(""),
+  emailTo: z.string().optional().default(""),
   notifyOnSuccess: z.boolean().optional().default(false),
   notifyOnFailure: z.boolean().optional().default(true),
 });

@@ -3,8 +3,9 @@ import { execFile } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import { promisify } from "node:util";
 import { Job } from "./db.js";
-import { pool } from "./db.js";
+import { getCredentialValue } from "./features.js";
 import { renderTemplate, sendNotifications } from "./notify.js";
+import { patchRuntimeState } from "./runtimeState.js";
 import { getNotificationSettings } from "./settings.js";
 
 const execFileAsync = promisify(execFile);
@@ -40,20 +41,31 @@ function booleanConfig(config: Record<string, unknown>, key: string, fallback: b
 }
 
 async function withNotificationSettings(config: Record<string, unknown>) {
+  const credentialConfig = typeof config.credentialId === "string" ? await getCredentialValue(config.credentialId) : {};
+  const configured = { ...credentialConfig, ...config };
   if (config.useGlobalNotifications === false) {
-    return config;
+    return configured;
   }
 
   const settings = await getNotificationSettings();
   return {
     ...settings,
-    ...config,
-    discordWebhookUrl: stringConfig(config, "discordWebhookUrl", settings.discordWebhookUrl),
-    ntfyServer: stringConfig(config, "ntfyServer", settings.ntfyServer),
-    ntfyTopic: stringConfig(config, "ntfyTopic", settings.ntfyTopic),
-    ntfyToken: stringConfig(config, "ntfyToken", settings.ntfyToken),
-    notifyOnSuccess: booleanConfig(config, "notifyOnSuccess", settings.notifyOnSuccess),
-    notifyOnFailure: booleanConfig(config, "notifyOnFailure", settings.notifyOnFailure),
+    ...configured,
+    discordWebhookUrl: stringConfig(configured, "discordWebhookUrl", settings.discordWebhookUrl),
+    slackWebhookUrl: stringConfig(configured, "slackWebhookUrl", settings.slackWebhookUrl),
+    ntfyServer: stringConfig(configured, "ntfyServer", settings.ntfyServer),
+    ntfyTopic: stringConfig(configured, "ntfyTopic", settings.ntfyTopic),
+    ntfyToken: stringConfig(configured, "ntfyToken", settings.ntfyToken),
+    telegramBotToken: stringConfig(configured, "telegramBotToken", settings.telegramBotToken),
+    telegramChatId: stringConfig(configured, "telegramChatId", settings.telegramChatId),
+    gotifyUrl: stringConfig(configured, "gotifyUrl", settings.gotifyUrl),
+    gotifyToken: stringConfig(configured, "gotifyToken", settings.gotifyToken),
+    webhookUrl: stringConfig(configured, "webhookUrl", settings.webhookUrl),
+    emailSmtpUrl: stringConfig(configured, "emailSmtpUrl", settings.emailSmtpUrl),
+    emailFrom: stringConfig(configured, "emailFrom", settings.emailFrom),
+    emailTo: stringConfig(configured, "emailTo", settings.emailTo),
+    notifyOnSuccess: booleanConfig(configured, "notifyOnSuccess", settings.notifyOnSuccess),
+    notifyOnFailure: booleanConfig(configured, "notifyOnFailure", settings.notifyOnFailure),
   };
 }
 
@@ -251,24 +263,16 @@ async function runNetworkMonitor(job: Job, notifyConfig: Record<string, unknown>
     }
   }
 
-  await pool.query(
-    `UPDATE jobs
-     SET config = config || $1::jsonb, updated_at = now()
-     WHERE id = $2`,
-    [
-      {
-        networkStatus: nextStatus,
-        outageStartedAt: outageStartedAt || null,
-        lastCheckedAt: now.toISOString(),
-        lastRecoveryDurationMs,
-        lastNetworkResults: results,
-        networkConsecutiveFailures: consecutiveFailures,
-        networkConsecutiveSuccesses: consecutiveSuccesses,
-        networkLastNotificationAt,
-      },
-      job.id,
-    ],
-  );
+  await patchRuntimeState(job.id, {
+    networkStatus: nextStatus,
+    outageStartedAt: outageStartedAt || null,
+    lastCheckedAt: now.toISOString(),
+    lastRecoveryDurationMs,
+    lastNetworkResults: results,
+    networkConsecutiveFailures: consecutiveFailures,
+    networkConsecutiveSuccesses: consecutiveSuccesses,
+    networkLastNotificationAt,
+  });
 
   const okForOutcome = nextStatus !== "down";
   return {

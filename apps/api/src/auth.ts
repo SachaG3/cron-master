@@ -10,6 +10,11 @@ const scrypt = promisify(scryptCallback);
 const PgSessionStore = connectPgSimple(session);
 const sessionCookieName = "cron_master_session";
 const sessionTtlMs = 30 * 24 * 60 * 60 * 1000;
+const sessionSecret = process.env.SESSION_SECRET ?? (process.env.NODE_ENV === "production" ? "" : "cron-master-dev-session-secret-change-me");
+
+if (!sessionSecret) {
+  throw new Error("SESSION_SECRET est requis en production");
+}
 
 const credentialsSchema = z.object({
   email: z.string().trim().email("Email invalide").transform((email) => email.toLowerCase()),
@@ -37,7 +42,7 @@ declare global {
 
 export const sessionMiddleware = session({
   name: sessionCookieName,
-  secret: process.env.SESSION_SECRET ?? "cron-master-dev-session-secret-change-me",
+  secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
   store: new PgSessionStore({

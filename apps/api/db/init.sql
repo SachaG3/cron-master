@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS credentials (
   name TEXT NOT NULL,
   type TEXT NOT NULL,
   value JSONB NOT NULL DEFAULT '{}'::jsonb,
+  encrypted_value TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -67,6 +68,8 @@ CREATE TABLE IF NOT EXISTS incidents (
   status TEXT NOT NULL DEFAULT 'open',
   opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   resolved_at TIMESTAMPTZ,
+  muted_until TIMESTAMPTZ,
+  escalated_at TIMESTAMPTZ,
   last_message TEXT NOT NULL DEFAULT '',
   details JSONB NOT NULL DEFAULT '{}'::jsonb
 );
@@ -97,3 +100,12 @@ CREATE TABLE IF NOT EXISTS "session" (
 );
 
 CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" (expire);
+
+CREATE TABLE IF NOT EXISTS job_runtime_state (
+  job_id UUID PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+  state JSONB NOT NULL DEFAULT '{}'::jsonb,
+  worker_claimed_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS job_runtime_worker_claim_idx ON job_runtime_state(worker_claimed_at);

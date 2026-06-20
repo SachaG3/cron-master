@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import parser from "cron-parser";
 import { pool, Job } from "./db.js";
@@ -82,14 +83,41 @@ export const jobInputSchema = z.object({
 });
 
 export type JobInput = z.infer<typeof jobInputSchema>;
+export type PaginationOptions = ListOptions;
 
-export async function listJobs() {
-  const result = await pool.query<Job>("SELECT * FROM jobs ORDER BY created_at DESC");
+type ListOptions = {
+  limit?: number;
+  offset?: number;
+};
+
+function pageLimit(value?: number) {
+  return Math.max(1, Math.min(200, value ?? 100));
+}
+
+function pageOffset(value?: number) {
+  return Math.max(0, value ?? 0);
+}
+
+export async function listJobs(options: ListOptions = {}) {
+  const result = await pool.query<Job>(
+    `SELECT j.*, j.config || COALESCE(s.state, '{}'::jsonb) AS config
+     FROM jobs j
+     LEFT JOIN job_runtime_state s ON s.job_id = j.id
+     ORDER BY j.created_at DESC
+     LIMIT $1 OFFSET $2`,
+    [pageLimit(options.limit), pageOffset(options.offset)],
+  );
   return result.rows;
 }
 
 export async function getJob(id: string) {
-  const result = await pool.query<Job>("SELECT * FROM jobs WHERE id = $1", [id]);
+  const result = await pool.query<Job>(
+    `SELECT j.*, j.config || COALESCE(s.state, '{}'::jsonb) AS config
+     FROM jobs j
+     LEFT JOIN job_runtime_state s ON s.job_id = j.id
+     WHERE j.id = $1`,
+    [id],
+  );
   return result.rows[0] ?? null;
 }
 
@@ -122,6 +150,32 @@ export async function createJob(input: JobInput) {
   );
 
   return result.rows[0];
+}
+
+export function buildTransientJob(input: JobInput): Job {
+  const now = new Date();
+  return {
+    id: randomUUID(),
+    name: input.name,
+    description: input.description,
+    type: input.type,
+    schedule_type: input.scheduleType,
+    cron_expression: input.cronExpression ?? null,
+    run_at: input.runAt ? new Date(input.runAt) : null,
+    timezone: input.timezone,
+    enabled: input.enabled,
+    config: input.config,
+    next_run_at: computeNextRun({
+      scheduleType: input.scheduleType,
+      cronExpression: input.cronExpression,
+      runAt: input.runAt,
+      timezone: input.timezone,
+      enabled: input.enabled,
+    }),
+    last_run_at: null,
+    created_at: now,
+    updated_at: now,
+  };
 }
 
 export async function updateJob(id: string, input: JobInput) {
@@ -213,9 +267,25 @@ export async function duplicateJob(id: string) {
   });
 }
 
-export async function listRuns(jobId?: string) {
+export async function listRuns(jobId?: string, options: ListOptions = {}) {
   const result = jobId
-    ? await pool.query("SELECT * FROM job_runs WHERE job_id = $1 ORDER BY started_at DESC LIMIT 100", [jobId])
-    : await pool.query("SELECT * FROM job_runs ORDER BY started_at DESC LIMIT 100");
+    ? await pool.query("SELECT * FROM job_runs WHERE job_id = $1 ORDER BY started_at DESC LIMIT $2 OFFSET $3", [jobId, pageLimit(options.limit), pageOffset(options.offset)])
+    : await pool.query("SELECT * FROM job_runs ORDER BY started_at DESC LIMIT $1 OFFSET $2", [pageLimit(options.limit), pageOffset(options.offset)]);
+  return result.rows;
+}
+
+export async function getRunStats(days = 7) {
+  const result = await pool.query(
+    `SELECT
+       date_trunc('day', started_at) AS day,
+       count(*)::int AS total,
+       count(*) FILTER (WHERE status = 'success')::int AS success,
+       count(*) FILTER (WHERE status = 'failure')::int AS failure
+     FROM job_runs
+     WHERE started_at > now() - ($1::int * interval '1 day')
+     GROUP BY 1
+     ORDER BY 1`,
+    [Math.max(1, Math.min(90, days))],
+  );
   return result.rows;
 }

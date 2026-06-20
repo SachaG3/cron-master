@@ -23,6 +23,8 @@ services:
       DATABASE_URL: postgres://cronmaster:cronmaster@postgres:5432/cronmaster
       DEFAULT_NTFY_SERVER: https://ntfy.sh
       CRON_MASTER_API_KEY: change-me-dev-key
+      SESSION_SECRET: change-me-dev-session-secret
+      CREDENTIALS_SECRET: change-me-dev-credentials-secret
     ports:
       - "4000:4000"
     depends_on:

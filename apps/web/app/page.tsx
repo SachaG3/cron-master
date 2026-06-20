@@ -36,6 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { AuthPanel } from "./auth-panel";
+import { MetricCard } from "./metric-card";
 
 type JobType = "notification" | "date_reminder" | "website_check" | "machine_check" | "network_monitor" | "script";
 type ScheduleType = "cron" | "once";
@@ -86,20 +87,30 @@ type JobRun = {
 
 type NotificationSettings = {
   discordWebhookUrl: string;
+  slackWebhookUrl: string;
   ntfyServer: string;
   ntfyTopic: string;
   ntfyToken: string;
+  telegramBotToken: string;
+  telegramChatId: string;
+  gotifyUrl: string;
+  gotifyToken: string;
+  webhookUrl: string;
+  emailSmtpUrl: string;
+  emailFrom: string;
+  emailTo: string;
   notifyOnSuccess: boolean;
   notifyOnFailure: boolean;
 };
 
 type Template = { id: string; name: string; description: string; job: { type: string; config: Record<string, unknown> } };
-type Incident = { id: string; title: string; severity: string; status: string; opened_at: string; last_message: string };
+type Incident = { id: string; title: string; severity: string; status: string; opened_at: string; muted_until?: string | null; escalated_at?: string | null; last_message: string };
 type Deadman = { id: string; name: string; slug: string; expected_interval_minutes: number; grace_minutes: number; status: string; last_ping_at: string | null };
 type Credential = { id: string; name: string; type: string; created_at: string };
 type Maintenance = { id: string; name: string; starts_at: string; ends_at: string; enabled: boolean };
 type Dashboard = { activeJobs: number; openIncidents: number; missingDeadmen: number; runs24h: { total: number; success: number; failure: number } };
 type AuthUser = { id: string; email: string };
+type RunStat = { day: string; total: number; success: number; failure: number };
 
 const API_URL = "/api/backend";
 
@@ -238,15 +249,26 @@ export default function Home() {
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [maintenance, setMaintenance] = useState<Maintenance[]>([]);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [runStats, setRunStats] = useState<RunStat[]>([]);
   const [settings, setSettings] = useState<NotificationSettings>({
     discordWebhookUrl: "",
+    slackWebhookUrl: "",
     ntfyServer: "https://ntfy.sh",
     ntfyTopic: "",
     ntfyToken: "",
+    telegramBotToken: "",
+    telegramChatId: "",
+    gotifyUrl: "",
+    gotifyToken: "",
+    webhookUrl: "",
+    emailSmtpUrl: "",
+    emailFrom: "",
+    emailTo: "",
     notifyOnSuccess: false,
     notifyOnFailure: true,
   });
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [authLoading, setAuthLoading] = useState(true);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [needsSetup, setNeedsSetup] = useState(false);
@@ -295,6 +317,8 @@ export default function Home() {
   const [deadmanName, setDeadmanName] = useState("Backup quotidien");
   const [deadmanSlug, setDeadmanSlug] = useState("backup-daily");
   const [credentialName, setCredentialName] = useState("Webhook prod");
+  const [credentialType, setCredentialType] = useState("webhook");
+  const [credentialValue, setCredentialValue] = useState("{\"webhookUrl\":\"https://example.com/webhook\"}");
   const [maintenanceName, setMaintenanceName] = useState("Maintenance");
   const [maintenanceStart, setMaintenanceStart] = useState("");
   const [maintenanceEnd, setMaintenanceEnd] = useState("");
@@ -384,7 +408,7 @@ export default function Home() {
   async function refresh() {
     setError("");
     try {
-      const [jobsData, runsData, settingsData, templatesData, incidentsData, deadmenData, credentialsData, maintenanceData, dashboardData] = await Promise.all([
+      const [jobsData, runsData, settingsData, templatesData, incidentsData, deadmenData, credentialsData, maintenanceData, dashboardData, runStatsData] = await Promise.all([
         api<Job[]>("/jobs"),
         api<JobRun[]>("/runs"),
         api<NotificationSettings>("/settings/notifications"),
@@ -394,6 +418,7 @@ export default function Home() {
         api<Credential[]>("/credentials"),
         api<Maintenance[]>("/maintenance"),
         api<Dashboard>("/dashboard"),
+        api<RunStat[]>("/stats/runs?days=7"),
       ]);
       setJobs(jobsData);
       setRuns(runsData);
@@ -404,6 +429,7 @@ export default function Home() {
       setCredentials(credentialsData);
       setMaintenance(maintenanceData);
       setDashboard(dashboardData);
+      setRunStats(runStatsData);
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
     }
@@ -484,27 +510,42 @@ export default function Home() {
     return base;
   }
 
+  function buildJobPayload() {
+    const schedule = buildSchedule();
+    return {
+      name,
+      description,
+      type,
+      scheduleType: schedule.scheduleType,
+      cronExpression: schedule.cronExpression,
+      runAt: schedule.runAt,
+      timezone: "Europe/Paris",
+      enabled,
+      config: buildConfig(schedule.label),
+    };
+  }
+
   async function submitJob(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const schedule = buildSchedule();
     await api(editingId ? `/jobs/${editingId}` : "/jobs", {
       method: editingId ? "PUT" : "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name,
-        description,
-        type,
-        scheduleType: schedule.scheduleType,
-        cronExpression: schedule.cronExpression,
-        runAt: schedule.runAt,
-        timezone: "Europe/Paris",
-        enabled,
-        config: buildConfig(schedule.label),
-      }),
+      body: JSON.stringify(buildJobPayload()),
     });
     setEditingId(null);
     setComposerOpen(false);
     await refresh();
+  }
+
+  async function testJob() {
+    setError("");
+    setNotice("");
+    const result = await api<{ status: string; message: string }>("/jobs/test", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(buildJobPayload()),
+    });
+    setNotice(`Test: ${result.status} - ${result.message}`);
   }
 
   function resetComposer() {
@@ -644,10 +685,11 @@ export default function Home() {
   }
 
   async function createCredential() {
+    const value = JSON.parse(credentialValue || "{}") as Record<string, unknown>;
     await api("/credentials", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: credentialName, type: "webhook", value: {} }),
+      body: JSON.stringify({ name: credentialName, type: credentialType, value }),
     });
     await refresh();
   }
@@ -673,6 +715,8 @@ export default function Home() {
   }
 
   async function importAll(value: string) {
+    const validation = await api<{ ok: boolean; errors: string[] }>("/import/validate", { method: "POST", headers: { "content-type": "application/json" }, body: value });
+    if (!validation.ok) throw new Error(validation.errors.join(", "));
     await api("/import", { method: "POST", headers: { "content-type": "application/json" }, body: value });
     await refresh();
   }
@@ -926,6 +970,10 @@ export default function Home() {
 
                 <div className="flex justify-end gap-2 border-t pt-4">
                   <Button type="button" variant="outline" onClick={() => setComposerOpen(false)}>Annuler</Button>
+                  <Button type="button" variant="outline" onClick={testJob}>
+                    <Play className="h-4 w-4" />
+                    Tester
+                  </Button>
                   <Button type="submit">
                     <Save className="h-4 w-4" />
                     {editingId ? "Sauver" : "Créer"}
@@ -949,7 +997,7 @@ export default function Home() {
             </div>
             <div className="flex flex-wrap gap-2">
               <span className="inline-flex h-9 items-center rounded-md border bg-muted px-3 text-sm text-muted-foreground">{authUser.email}</span>
-              <Button variant="outline" onClick={() => window.open(`${API_URL}/status`, "_blank")}><Globe2 className="h-4 w-4" />Status</Button>
+              <Button variant="outline" onClick={() => window.open(`${API_URL}/status.html`, "_blank")}><Globe2 className="h-4 w-4" />Status</Button>
               <Button variant="outline" onClick={refresh}><RefreshCw className="h-4 w-4" />Actualiser</Button>
               <Button variant="outline" onClick={logout}><LogOut className="h-4 w-4" />Sortir</Button>
               <Button onClick={resetComposer}><Plus className="h-4 w-4" />Nouveau job</Button>
@@ -968,6 +1016,7 @@ export default function Home() {
 
       <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6">
         {error && <p className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+        {notice && <p className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{notice}</p>}
 
         {activeView === "dashboard" && (
           <div className="space-y-5">
@@ -991,23 +1040,29 @@ export default function Home() {
             </Card>
             <HelpText>Le dashboard doit répondre à une question simple: est-ce que tout va bien, et où faut-il agir maintenant ?</HelpText>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Card className="p-4">
-            <p className="text-sm text-muted-foreground">Jobs actifs</p>
-            <p className="mt-2 text-3xl font-semibold">{dashboard?.activeJobs ?? jobs.filter((job) => job.enabled).length}</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-sm text-muted-foreground">Runs 24h</p>
-            <p className="mt-2 text-3xl font-semibold">{dashboard?.runs24h.total ?? 0}</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-sm text-muted-foreground">Échecs 24h</p>
-            <p className="mt-2 text-3xl font-semibold">{dashboard?.runs24h.failure ?? 0}</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-sm text-muted-foreground">Dead-man manquants</p>
-            <p className="mt-2 text-3xl font-semibold">{dashboard?.missingDeadmen ?? 0}</p>
-          </Card>
+              <MetricCard label="Jobs actifs" value={dashboard?.activeJobs ?? jobs.filter((job) => job.enabled).length} />
+              <MetricCard label="Runs 24h" value={dashboard?.runs24h.total ?? 0} />
+              <MetricCard label="Échecs 24h" value={dashboard?.runs24h.failure ?? 0} />
+              <MetricCard label="Dead-man manquants" value={dashboard?.missingDeadmen ?? 0} />
             </div>
+            <Card className="p-4">
+              <SectionTitle icon={Activity} title="Historique 7 jours" />
+              <div className="mt-4 grid gap-2">
+                {runStats.map((stat) => {
+                  const failurePercent = stat.total > 0 ? Math.round((stat.failure / stat.total) * 100) : 0;
+                  return (
+                    <div key={stat.day} className="grid grid-cols-[120px_1fr_80px] items-center gap-3 text-sm">
+                      <span className="text-muted-foreground">{formatDate(stat.day).split(" ")[0]}</span>
+                      <div className="h-2 overflow-hidden rounded bg-muted">
+                        <div className="h-full bg-destructive" style={{ width: `${failurePercent}%` }} />
+                      </div>
+                      <span className="text-right text-muted-foreground">{stat.failure}/{stat.total}</span>
+                    </div>
+                  );
+                })}
+                {runStats.length === 0 && <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">Aucune donnée historique pour le moment.</p>}
+              </div>
+            </Card>
             <div className="grid gap-4 lg:grid-cols-2">
               <Card className="p-4">
                 <SectionTitle icon={ShieldAlert} title="Incidents récents" />
@@ -1148,12 +1203,19 @@ export default function Home() {
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="font-medium">{incident.title}</p>
                             <Badge tone={incident.severity === "critical" ? "bad" : incident.severity === "info" ? "info" : "warn"}>{incident.severity}</Badge>
+                            {incident.muted_until && new Date(incident.muted_until) > new Date() && <Badge>mute</Badge>}
+                            {incident.escalated_at && <Badge tone="bad">escaladé</Badge>}
                           </div>
                           <p className="mt-1 text-xs text-muted-foreground">{formatDate(incident.opened_at)} · {incident.last_message}</p>
                         </div>
-                        <Button type="button" size="sm" variant="outline" onClick={() => api(`/incidents/${incident.id}/resolve`, { method: "POST" }).then(refresh)}>
-                          Résoudre
-                        </Button>
+                        <div className="flex gap-2">
+                          <Button type="button" size="sm" variant="outline" onClick={() => api(`/incidents/${incident.id}/mute`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ minutes: 60 }) }).then(refresh)}>
+                            Mute 1h
+                          </Button>
+                          <Button type="button" size="sm" variant="outline" onClick={() => api(`/incidents/${incident.id}/resolve`, { method: "POST" }).then(refresh)}>
+                            Résoudre
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -1247,8 +1309,17 @@ export default function Home() {
                 </div>
                 <div className="mt-3 grid gap-2">
                   <Input placeholder="Discord webhook" value={settings.discordWebhookUrl} onChange={(event) => setSettings({ ...settings, discordWebhookUrl: event.target.value })} />
+                  <Input placeholder="Slack webhook" value={settings.slackWebhookUrl} onChange={(event) => setSettings({ ...settings, slackWebhookUrl: event.target.value })} />
                   <Input placeholder="Serveur ntfy" value={settings.ntfyServer} onChange={(event) => setSettings({ ...settings, ntfyServer: event.target.value })} />
                   <Input placeholder="Topic ntfy" value={settings.ntfyTopic} onChange={(event) => setSettings({ ...settings, ntfyTopic: event.target.value })} />
+                  <Input placeholder="Token Telegram bot" value={settings.telegramBotToken} onChange={(event) => setSettings({ ...settings, telegramBotToken: event.target.value })} />
+                  <Input placeholder="Chat ID Telegram" value={settings.telegramChatId} onChange={(event) => setSettings({ ...settings, telegramChatId: event.target.value })} />
+                  <Input placeholder="URL Gotify" value={settings.gotifyUrl} onChange={(event) => setSettings({ ...settings, gotifyUrl: event.target.value })} />
+                  <Input placeholder="Token Gotify" value={settings.gotifyToken} onChange={(event) => setSettings({ ...settings, gotifyToken: event.target.value })} />
+                  <Input placeholder="Webhook générique" value={settings.webhookUrl} onChange={(event) => setSettings({ ...settings, webhookUrl: event.target.value })} />
+                  <Input placeholder="SMTP URL email" value={settings.emailSmtpUrl} onChange={(event) => setSettings({ ...settings, emailSmtpUrl: event.target.value })} />
+                  <Input placeholder="Email expéditeur" value={settings.emailFrom} onChange={(event) => setSettings({ ...settings, emailFrom: event.target.value })} />
+                  <Input placeholder="Email destinataire" value={settings.emailTo} onChange={(event) => setSettings({ ...settings, emailTo: event.target.value })} />
                   <label className="flex gap-2 text-sm">
                     <input type="checkbox" checked={settings.notifyOnFailure} onChange={(event) => setSettings({ ...settings, notifyOnFailure: event.target.checked })} />
                     Notifier les échecs
@@ -1294,6 +1365,16 @@ export default function Home() {
                   <p className="mt-2 text-sm text-muted-foreground">Prépare les connexions réutilisables pour les prochains blocs et webhooks.</p>
                   <div className="mt-3 grid gap-2">
                     <Input value={credentialName} onChange={(event) => setCredentialName(event.target.value)} />
+                    <select className={selectClassName()} value={credentialType} onChange={(event) => setCredentialType(event.target.value)}>
+                      <option value="webhook">webhook</option>
+                      <option value="discord">discord</option>
+                      <option value="slack">slack</option>
+                      <option value="ntfy">ntfy</option>
+                      <option value="telegram">telegram</option>
+                      <option value="gotify">gotify</option>
+                      <option value="email">email</option>
+                    </select>
+                    <Textarea value={credentialValue} onChange={(event) => setCredentialValue(event.target.value)} />
                     <Button type="button" onClick={createCredential}><Plus className="h-4 w-4" />Ajouter</Button>
                   </div>
                   <div className="mt-3 space-y-2">

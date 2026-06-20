@@ -43,6 +43,8 @@ Dans GitHub, configure ces secrets:
 | `DEPLOY_SSH_KEY` | Clé privée SSH |
 | `DEPLOY_PATH` | Dossier cible sur le serveur |
 | `CRON_MASTER_API_KEY` | Clé API publique |
+| `SESSION_SECRET` | Secret long et aléatoire pour signer les sessions |
+| `CREDENTIALS_SECRET` | Secret long et aléatoire pour chiffrer les credentials |
 | `POSTGRES_PASSWORD` | Mot de passe PostgreSQL |
 
 ## Préparer le serveur
@@ -103,7 +105,7 @@ Si un compte admin existe déjà alors que tu ne l'as pas créé, reprends la ma
 ```bash
 docker compose --env-file .env.production -f docker-compose.prod.yml exec postgres \
   psql -U cronmaster cronmaster \
-  -c "TRUNCATE admin_sessions, admin_users RESTART IDENTITY CASCADE;"
+  -c "TRUNCATE \"session\", admin_users RESTART IDENTITY CASCADE;"
 docker compose --env-file .env.production -f docker-compose.prod.yml restart api
 ```
 

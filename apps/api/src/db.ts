@@ -21,6 +21,13 @@ export type Job = {
   updated_at: Date;
 };
 
+export type JobRuntimeState = {
+  job_id: string;
+  state: Record<string, unknown>;
+  worker_claimed_at: Date | null;
+  updated_at: Date;
+};
+
 export type JobRun = {
   id: string;
   job_id: string;
