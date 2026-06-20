@@ -100,7 +100,7 @@ type Maintenance = { id: string; name: string; starts_at: string; ends_at: strin
 type Dashboard = { activeJobs: number; openIncidents: number; missingDeadmen: number; runs24h: { total: number; success: number; failure: number } };
 type AuthUser = { id: string; email: string };
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = "/api/backend";
 
 const weekDays = [
   { value: 1, label: "lundi" },

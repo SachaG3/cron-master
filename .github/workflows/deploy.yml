@@ -101,7 +101,6 @@ jobs:
           DEFAULT_NTFY_SERVER=https://ntfy.sh
           API_IMAGE=${{ needs.build-push.outputs.api_image }}:${{ needs.build-push.outputs.tag }}
           WEB_IMAGE=${{ needs.build-push.outputs.web_image }}:${{ needs.build-push.outputs.tag }}
-          PUBLIC_API_URL=${{ secrets.PUBLIC_API_URL }}
           API_PORT=4000
           WEB_PORT=3001
           ENV

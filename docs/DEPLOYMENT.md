@@ -45,7 +45,6 @@ Dans GitHub, configure ces secrets:
 | `CRON_MASTER_API_KEY` | Clé API publique |
 | `CRON_MASTER_SETUP_TOKEN` | Token requis pour créer le premier compte admin |
 | `POSTGRES_PASSWORD` | Mot de passe PostgreSQL |
-| `PUBLIC_API_URL` | URL publique utilisée par le front |
 
 ## Préparer le serveur
 
@@ -85,6 +84,8 @@ Renseigner les images et secrets, puis lancer:
 docker compose --env-file .env.production -f docker-compose.prod.yml pull
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 ```
+
+Le frontend ne doit pas appeler directement `localhost:4000` depuis le navigateur. Les appels d'administration passent par `/api/backend/...` sur le service web, puis Next relaie côté serveur vers `API_URL=http://api:4000` dans le réseau Docker.
 
 Vérifier:
 
