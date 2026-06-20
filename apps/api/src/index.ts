@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
+import { createApiToken, listApiTokens, revokeApiToken, testApiToken } from "./apiTokens.js";
 import { authRouter, requireAdminSession, sessionMiddleware } from "./auth.js";
 import { buildTransientJob, createJob, deleteJob, duplicateJob, getJob, getRunStats, jobInputSchema, listJobs, listRuns, setJobEnabled, updateJob } from "./jobs.js";
 import { runMigrations } from "./migrations.js";
@@ -37,11 +38,23 @@ import { verifyWebhookSignature } from "./webhookSecurity.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
+const allowedCorsOrigins = (process.env.CORS_ORIGIN ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+function corsOrigin(origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) {
+  if (allowedCorsOrigins.length === 0) {
+    callback(null, process.env.NODE_ENV !== "production");
+    return;
+  }
+  callback(null, !origin || allowedCorsOrigins.includes(origin));
+}
 
 app.set("trust proxy", 1);
 app.use(
   cors({
-    origin: true,
+    origin: corsOrigin,
     credentials: true,
   }),
 );
@@ -106,6 +119,40 @@ app.post("/webhooks/:id", async (req, res, next) => {
 });
 
 app.use(requireAdminSession);
+
+app.get("/api-tokens", async (_req, res, next) => {
+  try {
+    res.json(await listApiTokens());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api-tokens", async (req, res, next) => {
+  try {
+    res.status(201).json(await createApiToken(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api-tokens/test", async (req, res, next) => {
+  try {
+    res.json(await testApiToken(req.body));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api-tokens/:id/revoke", async (req, res, next) => {
+  try {
+    const token = await revokeApiToken(req.params.id);
+    if (!token) return res.status(404).json({ error: "Token API introuvable" });
+    res.json(token);
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/settings/notifications", async (_req, res, next) => {
   try {
@@ -266,32 +313,6 @@ app.delete("/deadman/:id", async (req, res, next) => {
   }
 });
 
-app.all("/ping/:slug", async (req, res, next) => {
-  try {
-    const deadman = await pingDeadman(req.params.slug);
-    if (!deadman) return res.status(404).json({ error: "Ping introuvable" });
-    res.json({ ok: true, deadman });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/status", async (_req, res, next) => {
-  try {
-    res.json(await getPublicStatus());
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/status.html", async (_req, res, next) => {
-  try {
-    res.type("html").send(await getPublicStatusHtml());
-  } catch (error) {
-    next(error);
-  }
-});
-
 app.get("/export", async (_req, res, next) => {
   try {
     res.json(await exportData());
@@ -402,17 +423,6 @@ app.post("/jobs/:id/run", async (req, res, next) => {
   }
 });
 
-app.post("/webhooks/:id", async (req, res, next) => {
-  try {
-    const job = await getJob(req.params.id);
-    if (!job) return res.status(404).json({ error: "Job introuvable" });
-    if (!verifyWebhookSignature(req, job)) return res.status(401).json({ error: "Signature webhook invalide" });
-    res.json(await runJobNow({ ...job, config: { ...job.config, webhookPayload: req.body } }));
-  } catch (error) {
-    next(error);
-  }
-});
-
 app.get("/runs", async (req, res, next) => {
   try {
     const jobId = typeof req.query.jobId === "string" ? req.query.jobId : undefined;
@@ -422,7 +432,8 @@ app.get("/runs", async (req, res, next) => {
   }
 });
 
-app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) return next(error);
   if (error instanceof ZodError) {
     return res.status(400).json({ error: "Payload invalide", details: error.flatten() });
   }
@@ -430,9 +441,15 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
   res.status(500).json({ error: error instanceof Error ? error.message : "Erreur interne" });
 });
 
-app.listen(port, () => {
-  console.log(`Cron Master API listening on :${port}`);
-  runMigrations()
-    .then(() => startWorker())
-    .catch((error) => console.error("database migration failed", error));
+async function main() {
+  await runMigrations();
+  app.listen(port, () => {
+    console.log(`Cron Master API listening on :${port}`);
+    startWorker();
+  });
+}
+
+main().catch((error) => {
+  console.error("Cron Master API failed to start", error);
+  process.exit(1);
 });

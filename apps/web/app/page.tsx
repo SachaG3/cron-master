@@ -13,6 +13,7 @@ import {
   HelpCircle,
   Download,
   Globe2,
+  KeyRound,
   LogOut,
   PauseCircle,
   Play,
@@ -111,8 +112,29 @@ type Maintenance = { id: string; name: string; starts_at: string; ends_at: strin
 type Dashboard = { activeJobs: number; openIncidents: number; missingDeadmen: number; runs24h: { total: number; success: number; failure: number } };
 type AuthUser = { id: string; email: string };
 type RunStat = { day: string; total: number; success: number; failure: number };
+type ApiTokenScope = "status:read" | "jobs:read" | "jobs:write" | "jobs:run" | "deadman:write";
+type ApiToken = {
+  id: string;
+  name: string;
+  description: string;
+  tokenPrefix: string;
+  lastFour: string;
+  scopes: ApiTokenScope[];
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+};
+type ApiTokenList = { tokens: ApiToken[]; availableScopes: ApiTokenScope[]; legacyEnabled: boolean };
 
 const API_URL = "/api/backend";
+
+const apiScopeLabels: Record<ApiTokenScope, { label: string; hint: string }> = {
+  "status:read": { label: "Statut", hint: "health, dashboard, status" },
+  "jobs:read": { label: "Lire jobs", hint: "liste, détails, runs" },
+  "jobs:write": { label: "Gérer jobs", hint: "créer, modifier, pause" },
+  "jobs:run": { label: "Exécuter", hint: "run, dry-run, webhook" },
+  "deadman:write": { label: "Dead-man", hint: "créer et ping" },
+};
 
 const weekDays = [
   { value: 1, label: "lundi" },
@@ -250,6 +272,15 @@ export default function Home() {
   const [maintenance, setMaintenance] = useState<Maintenance[]>([]);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [runStats, setRunStats] = useState<RunStat[]>([]);
+  const [apiTokens, setApiTokens] = useState<ApiToken[]>([]);
+  const [apiTokenScopes, setApiTokenScopes] = useState<ApiTokenScope[]>(["status:read", "jobs:read", "jobs:write", "jobs:run", "deadman:write"]);
+  const [apiTokenLegacyEnabled, setApiTokenLegacyEnabled] = useState(false);
+  const [apiTokenName, setApiTokenName] = useState("Integration externe");
+  const [apiTokenDescription, setApiTokenDescription] = useState("Usage API publique");
+  const [apiTokenSelectedScopes, setApiTokenSelectedScopes] = useState<ApiTokenScope[]>(["status:read", "jobs:read"]);
+  const [createdApiToken, setCreatedApiToken] = useState("");
+  const [apiTokenTestValue, setApiTokenTestValue] = useState("");
+  const [apiTokenTestResult, setApiTokenTestResult] = useState("");
   const [settings, setSettings] = useState<NotificationSettings>({
     discordWebhookUrl: "",
     slackWebhookUrl: "",
@@ -408,7 +439,7 @@ export default function Home() {
   async function refresh() {
     setError("");
     try {
-      const [jobsData, runsData, settingsData, templatesData, incidentsData, deadmenData, credentialsData, maintenanceData, dashboardData, runStatsData] = await Promise.all([
+      const [jobsData, runsData, settingsData, templatesData, incidentsData, deadmenData, credentialsData, maintenanceData, dashboardData, runStatsData, apiTokenData] = await Promise.all([
         api<Job[]>("/jobs"),
         api<JobRun[]>("/runs"),
         api<NotificationSettings>("/settings/notifications"),
@@ -419,6 +450,7 @@ export default function Home() {
         api<Maintenance[]>("/maintenance"),
         api<Dashboard>("/dashboard"),
         api<RunStat[]>("/stats/runs?days=7"),
+        api<ApiTokenList>("/api-tokens"),
       ]);
       setJobs(jobsData);
       setRuns(runsData);
@@ -430,6 +462,9 @@ export default function Home() {
       setMaintenance(maintenanceData);
       setDashboard(dashboardData);
       setRunStats(runStatsData);
+      setApiTokens(apiTokenData.tokens);
+      setApiTokenScopes(apiTokenData.availableScopes);
+      setApiTokenLegacyEnabled(apiTokenData.legacyEnabled);
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
     }
@@ -673,6 +708,76 @@ export default function Home() {
       body: JSON.stringify(settings),
     });
     await refresh();
+  }
+
+  function toggleApiTokenScope(scope: ApiTokenScope) {
+    setApiTokenSelectedScopes((current) => {
+      if (current.includes(scope)) {
+        return current.length === 1 ? current : current.filter((item) => item !== scope);
+      }
+      return [...current, scope];
+    });
+  }
+
+  async function createPublicApiToken() {
+    setError("");
+    setNotice("");
+    try {
+      const result = await api<{ token: string; apiToken: ApiToken }>("/api-tokens", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: apiTokenName, description: apiTokenDescription, scopes: apiTokenSelectedScopes }),
+      });
+      setCreatedApiToken(result.token);
+      setApiTokenTestValue(result.token);
+      setNotice("Token API créé. Copie-le maintenant, il ne sera plus affiché ensuite.");
+      await refresh();
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
+    }
+  }
+
+  async function revokePublicApiToken(id: string) {
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api-tokens/${id}/revoke`, { method: "POST" });
+      setNotice("Token API révoqué.");
+      await refresh();
+    } catch (revokeError) {
+      setError(revokeError instanceof Error ? revokeError.message : String(revokeError));
+    }
+  }
+
+  async function testPublicApiToken() {
+    setError("");
+    setNotice("");
+    setApiTokenTestResult("");
+    const token = apiTokenTestValue.trim();
+    if (!token) {
+      setError("Colle un token API à tester.");
+      return;
+    }
+
+    try {
+      const validation = await api<{ ok: boolean; reason: string; token?: { name: string; scopes: string[] } | null }>("/api-tokens/test", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (!validation.ok) throw new Error(validation.reason === "scope" ? "Permissions insuffisantes" : "Token invalide");
+
+      const health = await fetch(`${API_URL}/api/v1/health`, {
+        headers: { authorization: `Bearer ${token}` },
+        credentials: "include",
+      });
+      if (!health.ok) throw new Error(await readError(health));
+      const body = (await health.json()) as { ok: boolean; version: string };
+      setApiTokenTestResult(`OK ${body.version} · ${validation.token?.name ?? "token"} · ${validation.token?.scopes.join(", ")}`);
+      await refresh();
+    } catch (testError) {
+      setError(testError instanceof Error ? testError.message : String(testError));
+    }
   }
 
   async function createDeadman() {
@@ -1284,7 +1389,8 @@ export default function Home() {
         )}
 
         {activeView === "settings" && (
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-4">
+            <div className="grid gap-4 lg:grid-cols-2">
               <Card className="p-4">
                 <SectionTitle icon={Plus} title="Templates" />
                 <p className="mt-2 text-sm text-muted-foreground">Les templates pré-remplissent la modale de création. Tu peux ajuster tous les champs avant de sauvegarder.</p>
@@ -1334,6 +1440,100 @@ export default function Home() {
                   </div>
                 </div>
               </Card>
+            </div>
+
+            <Card className="p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <SectionTitle icon={KeyRound} title="API publique" />
+                  <p className="mt-2 text-sm text-muted-foreground">Crée des tokens séparés par usage et teste un appel réel à l'API publique.</p>
+                </div>
+                {apiTokenLegacyEnabled && <Badge tone="warn">clé legacy active</Badge>}
+              </div>
+
+              <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1fr]">
+                <div className="grid gap-3 rounded-lg border bg-muted/40 p-3">
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <Input placeholder="Nom du token" value={apiTokenName} onChange={(event) => setApiTokenName(event.target.value)} />
+                    <Input placeholder="Description" value={apiTokenDescription} onChange={(event) => setApiTokenDescription(event.target.value)} />
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                    {apiTokenScopes.map((scope) => (
+                      <button
+                        key={scope}
+                        type="button"
+                        onClick={() => toggleApiTokenScope(scope)}
+                        className={cx(
+                          "min-h-20 rounded-md border bg-card p-2 text-left text-xs transition hover:bg-muted",
+                          apiTokenSelectedScopes.includes(scope) && "border-primary bg-primary/5 ring-1 ring-primary",
+                        )}
+                      >
+                        <span className="block font-medium">{apiScopeLabels[scope]?.label ?? scope}</span>
+                        <span className="mt-1 block text-muted-foreground">{apiScopeLabels[scope]?.hint ?? scope}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <Button type="button" onClick={createPublicApiToken}>
+                    <KeyRound className="h-4 w-4" />
+                    Créer token
+                  </Button>
+
+                  {createdApiToken && (
+                    <div className="grid gap-2 rounded-md border border-amber-200 bg-amber-50 p-3">
+                      <p className="text-sm font-medium text-amber-900">Token visible une seule fois</p>
+                      <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+                        <Input readOnly value={createdApiToken} className="font-mono text-xs" />
+                        <Button type="button" variant="outline" onClick={() => navigator.clipboard.writeText(createdApiToken)}>
+                          <Copy className="h-4 w-4" />
+                          Copier
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid gap-3 rounded-lg border bg-card p-3">
+                  <div className="grid gap-2">
+                    <Label>Tester un token</Label>
+                    <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+                      <Input placeholder="cm_..." value={apiTokenTestValue} onChange={(event) => setApiTokenTestValue(event.target.value)} className="font-mono text-xs" />
+                      <Button type="button" variant="outline" onClick={testPublicApiToken}>
+                        <Play className="h-4 w-4" />
+                        Tester
+                      </Button>
+                    </div>
+                    {apiTokenTestResult && <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{apiTokenTestResult}</p>}
+                  </div>
+
+                  <div className="space-y-2">
+                    {apiTokens.map((token) => (
+                      <div key={token.id} className={cx("rounded-md border p-3", Boolean(token.revokedAt) && "bg-muted/50 opacity-70")}>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-medium">{token.name}</p>
+                              {token.revokedAt ? <Badge>révoqué</Badge> : <Badge tone="ok">actif</Badge>}
+                            </div>
+                            <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{token.tokenPrefix}...{token.lastFour}</p>
+                            {token.description && <p className="mt-1 text-xs text-muted-foreground">{token.description}</p>}
+                            <p className="mt-1 text-xs text-muted-foreground">Dernier usage: {formatDate(token.lastUsedAt)} · Créé: {formatDate(token.createdAt)}</p>
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {token.scopes.map((scope) => <Badge key={scope}>{apiScopeLabels[scope]?.label ?? scope}</Badge>)}
+                            </div>
+                          </div>
+                          {!token.revokedAt && (
+                            <Button type="button" size="sm" variant="destructive" onClick={() => revokePublicApiToken(token.id)}>
+                              Révoquer
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {apiTokens.length === 0 && <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">Aucun token API créé.</p>}
+                  </div>
+                </div>
+              </div>
+            </Card>
           </div>
         )}
 

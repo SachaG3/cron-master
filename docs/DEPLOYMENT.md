@@ -42,10 +42,17 @@ Dans GitHub, configure ces secrets:
 | `DEPLOY_USER` | Utilisateur SSH |
 | `DEPLOY_SSH_KEY` | Clé privée SSH |
 | `DEPLOY_PATH` | Dossier cible sur le serveur |
-| `CRON_MASTER_API_KEY` | Clé API publique |
 | `SESSION_SECRET` | Secret long et aléatoire pour signer les sessions |
 | `CREDENTIALS_SECRET` | Secret long et aléatoire pour chiffrer les credentials |
 | `POSTGRES_PASSWORD` | Mot de passe PostgreSQL |
+
+Secrets optionnels:
+
+| Secret | Description |
+| --- | --- |
+| `CRON_MASTER_API_KEY` | Clé API publique legacy pleine permission. Préférer les tokens scopés créés dans l'interface web. |
+| `CRON_MASTER_BLOCK_PRIVATE_TARGETS` | Mettre `true` pour refuser les checks HTTP/TCP vers des IP privées depuis les jobs. |
+| `CORS_ORIGIN` | Origines navigateur autorisées pour l'API, séparées par des virgules. Vide par défaut en production. |
 
 ## Préparer le serveur
 
@@ -92,13 +99,25 @@ Vérifier:
 
 ```bash
 curl http://localhost:4000/api/v1/health \
-  -H "authorization: Bearer $CRON_MASTER_API_KEY"
+  -H "authorization: Bearer $CRON_MASTER_TOKEN"
 curl -I http://localhost:3001
 ```
 
 ## Premier compte admin
 
 Au premier accès web, l'interface demande seulement l'email et le mot de passe du compte admin. Une fois le premier compte créé, `/auth/register` refuse toute nouvelle création.
+
+## Tokens API publics
+
+Après la première connexion admin:
+
+1. ouvre `Settings`;
+2. va dans `API publique`;
+3. crée un token avec les scopes nécessaires;
+4. copie le token affiché une seule fois;
+5. colle-le dans le champ de test pour vérifier `/api/v1/health`.
+
+Les tokens sont stockés hashés en base. Un token peut être révoqué depuis l'interface. `CRON_MASTER_API_KEY` reste accepté si la variable est définie, mais il agit comme une clé legacy avec toutes les permissions.
 
 Si un compte admin existe déjà alors que tu ne l'as pas créé, reprends la main depuis le serveur:
 

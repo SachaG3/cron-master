@@ -43,7 +43,7 @@ La clé d'API par défaut en Docker Compose est:
 change-me-dev-key
 ```
 
-En production, change `CRON_MASTER_API_KEY` dans `docker-compose.yml` ou via ton système de secrets.
+En production, crée plutôt des tokens scopés depuis `Settings > API publique`. `CRON_MASTER_API_KEY` reste disponible comme clé legacy optionnelle.
 
 ## Vue d'ensemble
 
@@ -304,14 +304,26 @@ http://localhost:4000/api/v1
 Authentification:
 
 ```txt
-Authorization: Bearer change-me-dev-key
+Authorization: Bearer cm_xxx
 ```
 
 ou:
 
 ```txt
-x-api-key: change-me-dev-key
+x-api-key: cm_xxx
 ```
+
+Les tokens se gèrent dans `Settings > API publique`. Le token brut est affiché une seule fois, puis seul son préfixe et ses 4 derniers caractères restent visibles.
+
+Scopes disponibles:
+
+| Scope | Usage |
+| --- | --- |
+| `status:read` | Health, status, dashboard, stats |
+| `jobs:read` | Liste, détails et runs des jobs |
+| `jobs:write` | Création, édition, pause, reprise, suppression |
+| `jobs:run` | Exécution immédiate, dry-run, webhook |
+| `deadman:write` | Création et ping dead-man |
 
 ### Endpoints
 
@@ -339,7 +351,7 @@ x-api-key: change-me-dev-key
 
 ```bash
 curl -X POST http://localhost:4000/api/v1/jobs \
-  -H "authorization: Bearer change-me-dev-key" \
+  -H "authorization: Bearer $CRON_MASTER_TOKEN" \
   -H "content-type: application/json" \
   -d '{
     "name": "Suivi réseau maison",
@@ -399,7 +411,8 @@ curl -X POST http://localhost:4000/api/v1/jobs \
 | Pas de notification | Tester Settings, vérifier Discord/ntfy, vérifier destinations locales |
 | Job sans exécution | Vérifier qu'il est actif, regarder le prochain passage, lancer manuellement |
 | Incident qui reste ouvert | Le job doit réussir à nouveau ou être résolu manuellement |
-| API 401 | Vérifier `Authorization: Bearer ...` ou `x-api-key` |
+| API 401 | Vérifier le token dans `Settings > API publique`, puis tester `/api/v1/health` depuis l'interface |
+| API 403 | Ajouter le scope requis au token ou créer un token dédié |
 
 ## Bonnes pratiques
 

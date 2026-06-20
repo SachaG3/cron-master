@@ -25,6 +25,7 @@ services:
       CRON_MASTER_API_KEY: change-me-dev-key
       SESSION_SECRET: change-me-dev-session-secret
       CREDENTIALS_SECRET: change-me-dev-credentials-secret
+      CRON_MASTER_BLOCK_PRIVATE_TARGETS: "false"
     ports:
       - "4000:4000"
     depends_on:

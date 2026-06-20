@@ -1,5 +1,6 @@
-import { NextFunction, Request, Response, Router } from "express";
+import { Request, Router } from "express";
 import { z } from "zod";
+import { requirePublicApiToken } from "./apiTokens.js";
 import { executeJob } from "./executor.js";
 import { createDeadman, getDashboard, getPublicStatus, pingDeadman, templates } from "./features.js";
 import { buildTransientJob, createJob, deleteJob, duplicateJob, getJob, getRunStats, jobInputSchema, listJobs, listRuns, setJobEnabled, updateJob } from "./jobs.js";
@@ -62,29 +63,17 @@ function toJobInput(input: z.infer<typeof publicJobSchema>) {
   });
 }
 
-function requireApiKey(req: Request, res: Response, next: NextFunction) {
-  const configuredKey = process.env.CRON_MASTER_API_KEY;
-  if (!configuredKey) return next();
-  const auth = req.headers.authorization;
-  const headerKey = req.headers["x-api-key"];
-  const token = typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice(7) : headerKey;
-  if (token !== configuredKey) return res.status(401).json({ error: "API key manquante ou invalide" });
-  next();
-}
-
 export const publicApiRouter = Router();
 
-publicApiRouter.use(requireApiKey);
-
-publicApiRouter.get("/health", (_req, res) => {
+publicApiRouter.get("/health", requirePublicApiToken(), (_req, res) => {
   res.json({ ok: true, version: "v1" });
 });
 
-publicApiRouter.get("/openapi.json", (_req, res) => {
+publicApiRouter.get("/openapi.json", requirePublicApiToken(), (_req, res) => {
   res.json(openApiDocument);
 });
 
-publicApiRouter.get("/dashboard", async (_req, res, next) => {
+publicApiRouter.get("/dashboard", requirePublicApiToken(["status:read"]), async (_req, res, next) => {
   try {
     res.json(await getDashboard());
   } catch (error) {
@@ -92,7 +81,7 @@ publicApiRouter.get("/dashboard", async (_req, res, next) => {
   }
 });
 
-publicApiRouter.get("/stats/runs", async (req, res, next) => {
+publicApiRouter.get("/stats/runs", requirePublicApiToken(["status:read"]), async (req, res, next) => {
   try {
     const days = typeof req.query.days === "string" ? Number(req.query.days) : undefined;
     res.json(await getRunStats(days));
@@ -101,7 +90,7 @@ publicApiRouter.get("/stats/runs", async (req, res, next) => {
   }
 });
 
-publicApiRouter.get("/status", async (_req, res, next) => {
+publicApiRouter.get("/status", requirePublicApiToken(["status:read"]), async (_req, res, next) => {
   try {
     res.json(await getPublicStatus());
   } catch (error) {
@@ -109,11 +98,11 @@ publicApiRouter.get("/status", async (_req, res, next) => {
   }
 });
 
-publicApiRouter.get("/templates", (_req, res) => {
+publicApiRouter.get("/templates", requirePublicApiToken(["jobs:read"]), (_req, res) => {
   res.json(templates);
 });
 
-publicApiRouter.get("/jobs", async (req, res, next) => {
+publicApiRouter.get("/jobs", requirePublicApiToken(["jobs:read"]), async (req, res, next) => {
   try {
     res.json(await listJobs(paginationFromQuery(req)));
   } catch (error) {
@@ -121,7 +110,7 @@ publicApiRouter.get("/jobs", async (req, res, next) => {
   }
 });
 
-publicApiRouter.post("/jobs", async (req, res, next) => {
+publicApiRouter.post("/jobs", requirePublicApiToken(["jobs:write"]), async (req, res, next) => {
   try {
     const input = publicJobSchema.parse(req.body);
     const job = await createJob(toJobInput(input));
@@ -131,7 +120,7 @@ publicApiRouter.post("/jobs", async (req, res, next) => {
   }
 });
 
-publicApiRouter.post("/jobs/test", async (req, res, next) => {
+publicApiRouter.post("/jobs/test", requirePublicApiToken(["jobs:run"]), async (req, res, next) => {
   try {
     const input = publicJobSchema.parse(req.body);
     res.json(await executeJob(buildTransientJob(toJobInput(input))));
@@ -140,7 +129,7 @@ publicApiRouter.post("/jobs/test", async (req, res, next) => {
   }
 });
 
-publicApiRouter.get("/jobs/:id", async (req, res, next) => {
+publicApiRouter.get("/jobs/:id", requirePublicApiToken(["jobs:read"]), async (req, res, next) => {
   try {
     const job = await getJob(req.params.id);
     if (!job) return res.status(404).json({ error: "Job introuvable" });
@@ -150,7 +139,7 @@ publicApiRouter.get("/jobs/:id", async (req, res, next) => {
   }
 });
 
-publicApiRouter.put("/jobs/:id", async (req, res, next) => {
+publicApiRouter.put("/jobs/:id", requirePublicApiToken(["jobs:write"]), async (req, res, next) => {
   try {
     const input = publicJobSchema.parse(req.body);
     const job = await updateJob(req.params.id, toJobInput(input));
@@ -161,7 +150,7 @@ publicApiRouter.put("/jobs/:id", async (req, res, next) => {
   }
 });
 
-publicApiRouter.delete("/jobs/:id", async (req, res, next) => {
+publicApiRouter.delete("/jobs/:id", requirePublicApiToken(["jobs:write"]), async (req, res, next) => {
   try {
     await deleteJob(req.params.id);
     res.status(204).end();
@@ -170,7 +159,7 @@ publicApiRouter.delete("/jobs/:id", async (req, res, next) => {
   }
 });
 
-publicApiRouter.post("/jobs/:id/duplicate", async (req, res, next) => {
+publicApiRouter.post("/jobs/:id/duplicate", requirePublicApiToken(["jobs:write"]), async (req, res, next) => {
   try {
     const job = await duplicateJob(req.params.id);
     if (!job) return res.status(404).json({ error: "Job introuvable" });
@@ -180,7 +169,7 @@ publicApiRouter.post("/jobs/:id/duplicate", async (req, res, next) => {
   }
 });
 
-publicApiRouter.post("/jobs/:id/pause", async (req, res, next) => {
+publicApiRouter.post("/jobs/:id/pause", requirePublicApiToken(["jobs:write"]), async (req, res, next) => {
   try {
     const job = await setJobEnabled(req.params.id, false);
     if (!job) return res.status(404).json({ error: "Job introuvable" });
@@ -190,7 +179,7 @@ publicApiRouter.post("/jobs/:id/pause", async (req, res, next) => {
   }
 });
 
-publicApiRouter.post("/jobs/:id/resume", async (req, res, next) => {
+publicApiRouter.post("/jobs/:id/resume", requirePublicApiToken(["jobs:write"]), async (req, res, next) => {
   try {
     const job = await setJobEnabled(req.params.id, true);
     if (!job) return res.status(404).json({ error: "Job introuvable" });
@@ -200,7 +189,7 @@ publicApiRouter.post("/jobs/:id/resume", async (req, res, next) => {
   }
 });
 
-publicApiRouter.post("/jobs/:id/run", async (req, res, next) => {
+publicApiRouter.post("/jobs/:id/run", requirePublicApiToken(["jobs:run"]), async (req, res, next) => {
   try {
     const job = await getJob(req.params.id);
     if (!job) return res.status(404).json({ error: "Job introuvable" });
@@ -210,7 +199,7 @@ publicApiRouter.post("/jobs/:id/run", async (req, res, next) => {
   }
 });
 
-publicApiRouter.post("/jobs/:id/webhook", async (req, res, next) => {
+publicApiRouter.post("/jobs/:id/webhook", requirePublicApiToken(["jobs:run"]), async (req, res, next) => {
   try {
     const job = await getJob(req.params.id);
     if (!job) return res.status(404).json({ error: "Job introuvable" });
@@ -221,7 +210,7 @@ publicApiRouter.post("/jobs/:id/webhook", async (req, res, next) => {
   }
 });
 
-publicApiRouter.get("/jobs/:id/runs", async (req, res, next) => {
+publicApiRouter.get("/jobs/:id/runs", requirePublicApiToken(["jobs:read"]), async (req, res, next) => {
   try {
     res.json(await listRuns(req.params.id, paginationFromQuery(req)));
   } catch (error) {
@@ -229,7 +218,7 @@ publicApiRouter.get("/jobs/:id/runs", async (req, res, next) => {
   }
 });
 
-publicApiRouter.post("/deadman", async (req, res, next) => {
+publicApiRouter.post("/deadman", requirePublicApiToken(["deadman:write"]), async (req, res, next) => {
   try {
     res.status(201).json(await createDeadman(req.body));
   } catch (error) {
@@ -237,7 +226,7 @@ publicApiRouter.post("/deadman", async (req, res, next) => {
   }
 });
 
-publicApiRouter.all("/deadman/:slug/ping", async (req, res, next) => {
+publicApiRouter.all("/deadman/:slug/ping", requirePublicApiToken(["deadman:write"]), async (req, res, next) => {
   try {
     const deadman = await pingDeadman(req.params.slug);
     if (!deadman) return res.status(404).json({ error: "Ping introuvable" });

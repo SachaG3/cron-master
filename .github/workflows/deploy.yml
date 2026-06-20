@@ -100,6 +100,7 @@ jobs:
           SESSION_SECRET=${{ secrets.SESSION_SECRET }}
           CREDENTIALS_SECRET=${{ secrets.CREDENTIALS_SECRET }}
           SESSION_COOKIE_SECURE=${{ secrets.SESSION_COOKIE_SECURE || 'false' }}
+          CRON_MASTER_BLOCK_PRIVATE_TARGETS=${{ secrets.CRON_MASTER_BLOCK_PRIVATE_TARGETS || 'false' }}
           DEFAULT_NTFY_SERVER=https://ntfy.sh
           API_IMAGE=${{ needs.build-push.outputs.api_image }}:${{ needs.build-push.outputs.tag }}
           WEB_IMAGE=${{ needs.build-push.outputs.web_image }}:${{ needs.build-push.outputs.tag }}
@@ -117,7 +118,10 @@ jobs:
           cd "${{ secrets.DEPLOY_PATH }}"
           . ./.env.production
           for i in {1..60}; do
-            if curl -fsS "http://localhost:${API_PORT}/api/v1/health" -H "authorization: Bearer ${CRON_MASTER_API_KEY}" >/dev/null; then
+            if curl -fsS "http://localhost:${API_PORT}/health" >/dev/null; then
+              if [ -n "${CRON_MASTER_API_KEY:-}" ]; then
+                curl -fsS "http://localhost:${API_PORT}/api/v1/health" -H "authorization: Bearer ${CRON_MASTER_API_KEY}" >/dev/null
+              fi
               curl -fsSI "http://localhost:${WEB_PORT}" >/dev/null
               exit 0
             fi

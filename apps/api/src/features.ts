@@ -164,8 +164,22 @@ export async function ensureProductTables() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS api_tokens (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      token_hash TEXT NOT NULL UNIQUE,
+      token_prefix TEXT NOT NULL,
+      last_four TEXT NOT NULL,
+      scopes JSONB NOT NULL DEFAULT '["status:read", "jobs:read"]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_used_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ
+    );
+
     CREATE INDEX IF NOT EXISTS incidents_status_idx ON incidents(status, opened_at DESC);
     CREATE INDEX IF NOT EXISTS maintenance_active_idx ON maintenance_windows(enabled, starts_at, ends_at);
+    CREATE INDEX IF NOT EXISTS api_tokens_active_idx ON api_tokens(revoked_at, created_at DESC);
   `);
 }
 

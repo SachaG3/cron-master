@@ -12,7 +12,7 @@ docker compose up --build
 - API: http://localhost:4000/health
 - API publique: http://localhost:4000/api/v1
 
-La clé d'API Docker Compose par défaut est `change-me-dev-key`. Change-la en production avec `CRON_MASTER_API_KEY`.
+La clé d'API Docker Compose par défaut est `change-me-dev-key`. En production, préfère créer des tokens scopés depuis l'onglet `Settings > API publique`. `CRON_MASTER_API_KEY` reste disponible comme clé legacy optionnelle.
 
 Guide complet: [`docs/CRON_MASTER_GUIDE.md`](docs/CRON_MASTER_GUIDE.md)
 
@@ -101,9 +101,17 @@ L'API versionnée permet à une autre app d'utiliser ce conteneur comme moteur d
 Authentification:
 
 ```bash
-Authorization: Bearer change-me-dev-key
+Authorization: Bearer cm_xxx
 # ou
-x-api-key: change-me-dev-key
+x-api-key: cm_xxx
+```
+
+Les tokens se créent dans l'interface web. Chaque token peut recevoir uniquement les scopes nécessaires: `status:read`, `jobs:read`, `jobs:write`, `jobs:run`, `deadman:write`. L'écran permet aussi de tester un token contre `/api/v1/health`.
+
+Pour les exemples ci-dessous:
+
+```bash
+export CRON_MASTER_TOKEN="cm_xxx"
 ```
 
 Endpoints principaux:
@@ -143,7 +151,7 @@ Créer un check HTTP toutes les 5 minutes:
 
 ```bash
 curl -X POST http://localhost:4000/api/v1/jobs \
-  -H "authorization: Bearer change-me-dev-key" \
+  -H "authorization: Bearer $CRON_MASTER_TOKEN" \
   -H "content-type: application/json" \
   -d '{
     "name": "Check API publique",
@@ -162,7 +170,7 @@ Créer une notification quotidienne:
 
 ```bash
 curl -X POST http://localhost:4000/api/v1/jobs \
-  -H "authorization: Bearer change-me-dev-key" \
+  -H "authorization: Bearer $CRON_MASTER_TOKEN" \
   -H "content-type: application/json" \
   -d '{
     "name": "Digest quotidien",
@@ -178,7 +186,7 @@ Créer un suivi réseau toutes les minutes:
 
 ```bash
 curl -X POST http://localhost:4000/api/v1/jobs \
-  -H "authorization: Bearer change-me-dev-key" \
+  -H "authorization: Bearer $CRON_MASTER_TOKEN" \
   -H "content-type: application/json" \
   -d '{
     "name": "Suivi réseau maison",
@@ -205,7 +213,7 @@ Lancer un job immédiatement:
 
 ```bash
 curl -X POST http://localhost:4000/api/v1/jobs/JOB_ID/run \
-  -H "authorization: Bearer change-me-dev-key" \
+  -H "authorization: Bearer $CRON_MASTER_TOKEN" \
   -H "content-type: application/json" \
   -d '{ "source": "external-app", "reason": "manual-test" }'
 ```
