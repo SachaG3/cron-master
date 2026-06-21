@@ -106,7 +106,7 @@ Authorization: Bearer cm_xxx
 x-api-key: cm_xxx
 ```
 
-Les tokens se créent dans l'interface web. Chaque token peut recevoir uniquement les scopes nécessaires: `status:read`, `jobs:read`, `jobs:write`, `jobs:run`, `deadman:write`. L'écran permet aussi de tester un token contre `/api/v1/health`.
+Les tokens se créent dans l'interface web. Chaque token peut recevoir uniquement les scopes nécessaires: `status:read`, `jobs:read`, `jobs:write`, `jobs:run`, `deadman:read`, `deadman:write`. L'écran permet aussi de choisir un preset, définir une expiration, régénérer un token et lancer un test détaillé: appel réel `/api/v1/me`, mode Bearer ou `x-api-key`, puis probes par endpoint/scope sans effet destructif.
 
 Pour les exemples ci-dessous:
 
@@ -117,6 +117,8 @@ export CRON_MASTER_TOKEN="cm_xxx"
 Endpoints principaux:
 
 - `GET /api/v1/health`: vérifier que l'API répond
+- `GET /api/v1/me`: inspecter le token courant et ses scopes
+- `GET /api/v1/scopes`: lister les scopes et probes de test disponibles
 - `GET /api/v1/jobs`: lister les jobs
 - `POST /api/v1/jobs`: créer un job avec une planification lisible
 - `GET /api/v1/jobs/:id`: récupérer un job
@@ -133,6 +135,7 @@ Endpoints principaux:
 - `GET /api/v1/jobs/:id/runs`: lire l'historique d'exécution
 - `GET /api/v1/dashboard`: récupérer le résumé opérationnel
 - `GET /api/v1/status`: récupérer la page de statut JSON
+- `GET /api/v1/deadman`: lister les dead-man switches
 - `POST /api/v1/deadman`: créer un dead-man switch
 - `ALL /api/v1/deadman/:slug/ping`: ping depuis une tâche externe
 

@@ -196,13 +196,24 @@ export async function ensureProductTables() {
       last_four TEXT NOT NULL,
       scopes JSONB NOT NULL DEFAULT '["status:read", "jobs:read"]'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       last_used_at TIMESTAMPTZ,
+      last_used_ip TEXT,
+      last_used_user_agent TEXT,
+      usage_count INTEGER NOT NULL DEFAULT 0,
+      expires_at TIMESTAMPTZ,
       revoked_at TIMESTAMPTZ
     );
+    ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+    ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+    ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS last_used_ip TEXT;
+    ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS last_used_user_agent TEXT;
+    ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS usage_count INTEGER NOT NULL DEFAULT 0;
 
     CREATE INDEX IF NOT EXISTS incidents_status_idx ON incidents(status, opened_at DESC);
     CREATE INDEX IF NOT EXISTS maintenance_active_idx ON maintenance_windows(enabled, starts_at, ends_at);
     CREATE INDEX IF NOT EXISTS api_tokens_active_idx ON api_tokens(revoked_at, created_at DESC);
+    CREATE INDEX IF NOT EXISTS api_tokens_expiry_idx ON api_tokens(expires_at);
     CREATE INDEX IF NOT EXISTS deadman_checks_enabled_status_idx ON deadman_checks(enabled, status);
   `);
 }

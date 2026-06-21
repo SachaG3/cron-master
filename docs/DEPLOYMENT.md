@@ -115,9 +115,9 @@ Après la première connexion admin:
 2. va dans `API publique`;
 3. crée un token avec les scopes nécessaires;
 4. copie le token affiché une seule fois;
-5. colle-le dans le champ de test pour vérifier `/api/v1/health`.
+5. colle-le dans le champ de test pour vérifier `/api/v1/me`, le mode Bearer ou `x-api-key`, puis les probes par scope.
 
-Les tokens sont stockés hashés en base. Un token peut être révoqué depuis l'interface. `CRON_MASTER_API_KEY` reste accepté si la variable est définie, mais il agit comme une clé legacy avec toutes les permissions.
+Les tokens sont stockés hashés en base. Ils peuvent avoir une expiration, être révoqués ou régénérés depuis l'interface. Cron Master enregistre aussi le dernier usage, l'IP, le user-agent et le compteur d'utilisation lors des appels publics réels. Les tests admin de scopes restent non destructifs et n'incrémentent pas artificiellement le compteur. `CRON_MASTER_API_KEY` reste accepté si la variable est définie, mais il agit comme une clé legacy avec toutes les permissions.
 
 Si un compte admin existe déjà alors que tu ne l'as pas créé, reprends la main depuis le serveur:
 

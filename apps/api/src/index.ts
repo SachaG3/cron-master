@@ -1,7 +1,7 @@
 import cors from "cors";
 import express from "express";
-import { ZodError } from "zod";
-import { createApiToken, listApiTokens, revokeApiToken, testApiToken } from "./apiTokens.js";
+import { z, ZodError } from "zod";
+import { createApiToken, listApiTokens, revokeApiToken, rotateApiToken, testApiToken, updateApiToken } from "./apiTokens.js";
 import { authRouter, requireAdminSession, sessionMiddleware } from "./auth.js";
 import { buildTransientJob, createJob, deleteJob, duplicateJob, getJob, getRunStats, jobInputSchema, listJobs, listRuns, setJobEnabled, updateJob } from "./jobs.js";
 import { runMigrations } from "./migrations.js";
@@ -42,6 +42,13 @@ import { verifyWebhookSignature } from "./webhookSecurity.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
+const paginationQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+}).passthrough();
+const statsQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(365).optional(),
+}).passthrough();
 const allowedCorsOrigins = (process.env.CORS_ORIGIN ?? "")
   .split(",")
   .map((origin) => origin.trim())
@@ -72,10 +79,7 @@ app.get("/health", (_req, res) => {
 });
 
 function paginationFromQuery(req: express.Request) {
-  return {
-    limit: typeof req.query.limit === "string" ? Number(req.query.limit) : undefined,
-    offset: typeof req.query.offset === "string" ? Number(req.query.offset) : undefined,
-  };
+  return paginationQuerySchema.parse(req.query);
 }
 
 app.use("/api/v1", publicApiRouter);
@@ -148,6 +152,26 @@ app.post("/api-tokens/test", async (req, res, next) => {
   }
 });
 
+app.put("/api-tokens/:id", async (req, res, next) => {
+  try {
+    const token = await updateApiToken(req.params.id, req.body);
+    if (!token) return res.status(404).json({ error: "Token API introuvable" });
+    res.json(token);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api-tokens/:id/rotate", async (req, res, next) => {
+  try {
+    const token = await rotateApiToken(req.params.id);
+    if (!token) return res.status(404).json({ error: "Token API introuvable" });
+    res.json(token);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api-tokens/:id/revoke", async (req, res, next) => {
   try {
     const token = await revokeApiToken(req.params.id);
@@ -194,7 +218,7 @@ app.get("/dashboard", async (_req, res, next) => {
 
 app.get("/stats/runs", async (req, res, next) => {
   try {
-    const days = typeof req.query.days === "string" ? Number(req.query.days) : undefined;
+    const { days } = statsQuerySchema.parse(req.query);
     res.json(await getRunStats(days));
   } catch (error) {
     next(error);

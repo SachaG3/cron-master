@@ -31,7 +31,7 @@ export const openApiDocument = {
   openapi: "3.0.3",
   info: {
     title: "Cron Master API",
-    version: "1.1.0",
+    version: "1.3.0",
     description: "API publique pour piloter Cron Master avec des tokens scopés créés dans l'interface web.",
   },
   components: {
@@ -52,7 +52,44 @@ export const openApiDocument = {
         type: "object",
         properties: {
           error: { type: "string" },
+          reason: { enum: ["missing", "invalid", "expired", "scope"] },
           requiredScopes: { type: "array", items: { type: "string" } },
+          details: { type: "object", additionalProperties: true },
+        },
+      },
+      TokenInfo: {
+        type: "object",
+        properties: {
+          id: { type: "string", nullable: true },
+          name: { type: "string" },
+          scopes: { type: "array", items: { type: "string" } },
+          legacy: { type: "boolean" },
+        },
+      },
+      ProbeTarget: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          label: { type: "string" },
+          method: { type: "string" },
+          path: { type: "string" },
+          requiredScopes: { type: "array", items: { type: "string" } },
+          liveSafe: { type: "boolean" },
+          destructive: { type: "boolean" },
+        },
+      },
+      Introspection: {
+        type: "object",
+        properties: {
+          token: { $ref: "#/components/schemas/TokenInfo" },
+          availableScopes: { type: "array", items: { type: "string" } },
+        },
+      },
+      ScopeCatalog: {
+        type: "object",
+        properties: {
+          scopes: { type: "array", items: { type: "string" } },
+          probes: { type: "array", items: { $ref: "#/components/schemas/ProbeTarget" } },
         },
       },
       Schedule: {
@@ -106,13 +143,32 @@ export const openApiDocument = {
         },
       }),
     },
+    "/api/v1/me": {
+      get: operation("Introspecter le token courant", [], {
+        responses: {
+          "200": { description: "Token courant", content: json({ $ref: "#/components/schemas/Introspection" }) },
+          ...authErrors,
+        },
+      }),
+    },
+    "/api/v1/scopes": {
+      get: operation("Lister les scopes et probes de test", [], {
+        responses: {
+          "200": { description: "Scopes disponibles", content: json({ $ref: "#/components/schemas/ScopeCatalog" }) },
+          ...authErrors,
+        },
+      }),
+    },
     "/api/v1/openapi.json": { get: operation("Lire cette description OpenAPI", []) },
     "/api/v1/dashboard": { get: operation("Lire le résumé opérationnel", ["status:read"]) },
     "/api/v1/status": { get: operation("Lire le status JSON public", ["status:read"]) },
     "/api/v1/templates": { get: operation("Lister les templates de jobs", ["jobs:read"]) },
     "/api/v1/jobs": {
       get: operation("Lister les jobs", ["jobs:read"], {
-        parameters: [{ name: "limit", in: "query" }, { name: "offset", in: "query" }],
+        parameters: [
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200 } },
+          { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
+        ],
       }),
       post: operation("Créer un job", ["jobs:write"], {
         requestBody: { required: true, content: json({ $ref: "#/components/schemas/JobInput" }) },
@@ -136,14 +192,29 @@ export const openApiDocument = {
     "/api/v1/jobs/{id}/resume": { post: operation("Reprendre un job", ["jobs:write"]) },
     "/api/v1/jobs/{id}/run": { post: operation("Lancer un job maintenant", ["jobs:run"]) },
     "/api/v1/jobs/{id}/webhook": { post: operation("Déclencher un job par webhook avec signature HMAC optionnelle", ["jobs:run"]) },
-    "/api/v1/jobs/{id}/runs": { get: operation("Lister les runs d'un job", ["jobs:read"]) },
-    "/api/v1/stats/runs": { get: operation("Lire les statistiques journalières de runs", ["status:read"]) },
+    "/api/v1/jobs/{id}/runs": {
+      get: operation("Lister les runs d'un job", ["jobs:read"], {
+        parameters: [
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200 } },
+          { name: "offset", in: "query", schema: { type: "integer", minimum: 0 } },
+        ],
+      }),
+    },
+    "/api/v1/stats/runs": {
+      get: operation("Lire les statistiques journalières de runs", ["status:read"], {
+        parameters: [{ name: "days", in: "query", schema: { type: "integer", minimum: 1, maximum: 365 } }],
+      }),
+    },
     "/api/v1/deadman": {
+      get: operation("Lister les dead-man switches", ["deadman:read"]),
       post: operation("Créer un dead-man switch", ["deadman:write"], {
         requestBody: { required: true, content: json({ $ref: "#/components/schemas/DeadmanInput" }) },
         responses: { "201": { description: "Dead-man créé" }, ...authErrors, "400": errorResponse },
       }),
     },
-    "/api/v1/deadman/{slug}/ping": { post: operation("Ping d'un dead-man switch", ["deadman:write"]) },
+    "/api/v1/deadman/{slug}/ping": {
+      get: operation("Ping d'un dead-man switch", ["deadman:write"]),
+      post: operation("Ping d'un dead-man switch", ["deadman:write"]),
+    },
   },
 };

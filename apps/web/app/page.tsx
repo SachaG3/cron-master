@@ -129,7 +129,7 @@ type Maintenance = { id: string; name: string; starts_at: string; ends_at: strin
 type Dashboard = { activeJobs: number; openIncidents: number; missingDeadmen: number; runs24h: { total: number; success: number; failure: number } };
 type AuthUser = { id: string; email: string };
 type RunStat = { day: string; total: number; success: number; failure: number };
-type ApiTokenScope = "status:read" | "jobs:read" | "jobs:write" | "jobs:run" | "deadman:write";
+type ApiTokenScope = "status:read" | "jobs:read" | "jobs:write" | "jobs:run" | "deadman:read" | "deadman:write";
 type ApiToken = {
   id: string;
   name: string;
@@ -138,10 +138,38 @@ type ApiToken = {
   lastFour: string;
   scopes: ApiTokenScope[];
   createdAt: string;
+  updatedAt: string;
   lastUsedAt: string | null;
+  lastUsedIp: string | null;
+  lastUsedUserAgent: string | null;
+  usageCount: number;
+  expiresAt: string | null;
+  expired: boolean;
   revokedAt: string | null;
 };
 type ApiTokenList = { tokens: ApiToken[]; availableScopes: ApiTokenScope[]; legacyEnabled: boolean };
+type ApiTokenProbe = {
+  id: string;
+  label: string;
+  method: string;
+  path: string;
+  requiredScopes: ApiTokenScope[];
+  liveSafe: boolean;
+  destructive: boolean;
+  ok: boolean;
+  reason: string;
+  status: number;
+  message: string;
+};
+type ApiTokenTestResult = {
+  ok: boolean;
+  reason: string;
+  token?: { name: string; scopes: string[]; legacy?: boolean } | null;
+  requestedScopes: ApiTokenScope[];
+  probes: ApiTokenProbe[];
+  liveCheck?: ApiTokenProbe;
+};
+type ApiTokenTestAuthMode = "bearer" | "api-key";
 
 const API_URL = "/api/backend";
 
@@ -150,7 +178,24 @@ const apiScopeLabels: Record<ApiTokenScope, { label: string; hint: string }> = {
   "jobs:read": { label: "Lire jobs", hint: "liste, détails, runs" },
   "jobs:write": { label: "Gérer jobs", hint: "créer, modifier, pause" },
   "jobs:run": { label: "Exécuter", hint: "run, dry-run, webhook" },
+  "deadman:read": { label: "Lire dead-man", hint: "liste et état" },
   "deadman:write": { label: "Dead-man", hint: "créer et ping" },
+};
+
+const apiTokenPresets: Array<{ label: string; description: string; scopes: ApiTokenScope[] }> = [
+  { label: "Status page", description: "Lecture seule pour dashboard, status et stats.", scopes: ["status:read"] },
+  { label: "Intégration jobs", description: "Créer, lire et lancer des jobs depuis une app externe.", scopes: ["status:read", "jobs:read", "jobs:write", "jobs:run"] },
+  { label: "Runner externe", description: "Déclencher uniquement des jobs déjà configurés.", scopes: ["jobs:run"] },
+  { label: "Dead-man", description: "Créer et pinguer des dead-man switches.", scopes: ["deadman:read", "deadman:write"] },
+  { label: "Lecture complète", description: "Lire l'état opérationnel sans modifier.", scopes: ["status:read", "jobs:read", "deadman:read"] },
+];
+
+const apiTokenReasonLabels: Record<string, string> = {
+  ok: "Autorisé",
+  missing: "Token absent",
+  invalid: "Token invalide",
+  expired: "Token expiré",
+  scope: "Scope manquant",
 };
 
 const weekDays = [
@@ -290,14 +335,16 @@ export default function Home() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [runStats, setRunStats] = useState<RunStat[]>([]);
   const [apiTokens, setApiTokens] = useState<ApiToken[]>([]);
-  const [apiTokenScopes, setApiTokenScopes] = useState<ApiTokenScope[]>(["status:read", "jobs:read", "jobs:write", "jobs:run", "deadman:write"]);
+  const [apiTokenScopes, setApiTokenScopes] = useState<ApiTokenScope[]>(["status:read", "jobs:read", "jobs:write", "jobs:run", "deadman:read", "deadman:write"]);
   const [apiTokenLegacyEnabled, setApiTokenLegacyEnabled] = useState(false);
   const [apiTokenName, setApiTokenName] = useState("Integration externe");
   const [apiTokenDescription, setApiTokenDescription] = useState("Usage API publique");
   const [apiTokenSelectedScopes, setApiTokenSelectedScopes] = useState<ApiTokenScope[]>(["status:read", "jobs:read"]);
+  const [apiTokenExpiresAt, setApiTokenExpiresAt] = useState("");
   const [createdApiToken, setCreatedApiToken] = useState("");
   const [apiTokenTestValue, setApiTokenTestValue] = useState("");
-  const [apiTokenTestResult, setApiTokenTestResult] = useState("");
+  const [apiTokenTestResult, setApiTokenTestResult] = useState<ApiTokenTestResult | null>(null);
+  const [apiTokenTestAuthMode, setApiTokenTestAuthMode] = useState<ApiTokenTestAuthMode>("bearer");
   const [settings, setSettings] = useState<NotificationSettings>({
     discordWebhookUrl: "",
     slackWebhookUrl: "",
@@ -747,6 +794,12 @@ export default function Home() {
     });
   }
 
+  function applyApiTokenPreset(preset: { label: string; description: string; scopes: ApiTokenScope[] }) {
+    setApiTokenName(preset.label);
+    setApiTokenDescription(preset.description);
+    setApiTokenSelectedScopes(preset.scopes);
+  }
+
   async function createPublicApiToken() {
     setError("");
     setNotice("");
@@ -754,14 +807,52 @@ export default function Home() {
       const result = await api<{ token: string; apiToken: ApiToken }>("/api-tokens", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: apiTokenName, description: apiTokenDescription, scopes: apiTokenSelectedScopes }),
+        body: JSON.stringify({
+          name: apiTokenName,
+          description: apiTokenDescription,
+          scopes: apiTokenSelectedScopes,
+          expiresAt: apiTokenExpiresAt ? new Date(apiTokenExpiresAt).toISOString() : null,
+        }),
       });
       setCreatedApiToken(result.token);
       setApiTokenTestValue(result.token);
+      setApiTokenTestResult(null);
       setNotice("Token API créé. Copie-le maintenant, il ne sera plus affiché ensuite.");
       await refresh();
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : String(createError));
+    }
+  }
+
+  async function rotatePublicApiToken(id: string) {
+    setError("");
+    setNotice("");
+    try {
+      const result = await api<{ token: string; apiToken: ApiToken }>(`/api-tokens/${id}/rotate`, { method: "POST" });
+      setCreatedApiToken(result.token);
+      setApiTokenTestValue(result.token);
+      setApiTokenTestResult(null);
+      setNotice("Token API régénéré. L'ancienne valeur ne fonctionne plus.");
+      await refresh();
+    } catch (rotateError) {
+      setError(rotateError instanceof Error ? rotateError.message : String(rotateError));
+    }
+  }
+
+  async function extendPublicApiToken(token: ApiToken, days: number) {
+    setError("");
+    setNotice("");
+    try {
+      const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+      await api(`/api-tokens/${token.id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: token.name, description: token.description, scopes: token.scopes, expiresAt }),
+      });
+      setNotice(`Expiration prolongée de ${days} jours.`);
+      await refresh();
+    } catch (extendError) {
+      setError(extendError instanceof Error ? extendError.message : String(extendError));
     }
   }
 
@@ -780,7 +871,7 @@ export default function Home() {
   async function testPublicApiToken() {
     setError("");
     setNotice("");
-    setApiTokenTestResult("");
+    setApiTokenTestResult(null);
     const token = apiTokenTestValue.trim();
     if (!token) {
       setError("Colle un token API à tester.");
@@ -788,20 +879,47 @@ export default function Home() {
     }
 
     try {
-      const validation = await api<{ ok: boolean; reason: string; token?: { name: string; scopes: string[] } | null }>("/api-tokens/test", {
+      const validation = await api<ApiTokenTestResult>("/api-tokens/test", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({ token, scopes: apiTokenSelectedScopes }),
       });
-      if (!validation.ok) throw new Error(validation.reason === "scope" ? "Permissions insuffisantes" : "Token invalide");
 
-      const health = await fetch(`${API_URL}/api/v1/health`, {
-        headers: { authorization: `Bearer ${token}` },
-        credentials: "include",
-      });
-      if (!health.ok) throw new Error(await readError(health));
-      const body = (await health.json()) as { ok: boolean; version: string };
-      setApiTokenTestResult(`OK ${body.version} · ${validation.token?.name ?? "token"} · ${validation.token?.scopes.join(", ")}`);
+      let liveCheck: ApiTokenProbe | undefined;
+      let tokenDetails = validation.token;
+      if (validation.ok) {
+        const headers: HeadersInit = apiTokenTestAuthMode === "bearer" ? { authorization: `Bearer ${token}` } : { "x-api-key": token };
+        const health = await fetch(`${API_URL}/api/v1/me`, {
+          headers,
+          credentials: "include",
+        });
+        if (health.ok) {
+          const body = (await health.json()) as { token?: { name: string; scopes: string[]; legacy?: boolean } };
+          tokenDetails = body.token ?? tokenDetails;
+        }
+        liveCheck = {
+          id: "live-me",
+          label: apiTokenTestAuthMode === "bearer" ? "Appel réel Bearer" : "Appel réel x-api-key",
+          method: "GET",
+          path: "/api/v1/me",
+          requiredScopes: [],
+          liveSafe: true,
+          destructive: false,
+          ok: health.ok,
+          reason: health.ok ? "ok" : "invalid",
+          status: health.status,
+          message: health.ok ? "Réponse publique reçue" : await readError(health),
+        };
+      }
+
+      setApiTokenTestResult({ ...validation, token: tokenDetails, liveCheck });
+      if (!validation.ok) {
+        setError(apiTokenReasonLabels[validation.reason] ?? "Token refusé");
+      } else if (liveCheck && !liveCheck.ok) {
+        setError(liveCheck.message);
+      } else {
+        setNotice("Test API terminé.");
+      }
       await refresh();
     } catch (testError) {
       setError(testError instanceof Error ? testError.message : String(testError));
@@ -1522,11 +1640,23 @@ export default function Home() {
 
               <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1fr]">
                 <div className="grid gap-3 rounded-lg border bg-muted/40 p-3">
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                    {apiTokenPresets.map((preset) => (
+                      <button key={preset.label} type="button" className="rounded-md border bg-card p-2 text-left transition hover:bg-muted" onClick={() => applyApiTokenPreset(preset)}>
+                        <span className="block text-sm font-medium">{preset.label}</span>
+                        <span className="mt-1 block text-xs text-muted-foreground">{preset.scopes.length} scope(s)</span>
+                      </button>
+                    ))}
+                  </div>
                   <div className="grid gap-2 md:grid-cols-2">
                     <Input placeholder="Nom du token" value={apiTokenName} onChange={(event) => setApiTokenName(event.target.value)} />
                     <Input placeholder="Description" value={apiTokenDescription} onChange={(event) => setApiTokenDescription(event.target.value)} />
                   </div>
-                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                  <div className="grid gap-1">
+                    <Label>Expiration optionnelle</Label>
+                    <Input type="datetime-local" value={apiTokenExpiresAt} onChange={(event) => setApiTokenExpiresAt(event.target.value)} />
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
                     {apiTokenScopes.map((scope) => (
                       <button
                         key={scope}
@@ -1564,6 +1694,24 @@ export default function Home() {
                 <div className="grid gap-3 rounded-lg border bg-card p-3">
                   <div className="grid gap-2">
                     <Label>Tester un token</Label>
+                    <div className="inline-grid w-fit grid-cols-2 rounded-md border bg-muted p-1 text-xs">
+                      {[
+                        ["bearer", "Bearer"],
+                        ["api-key", "x-api-key"],
+                      ].map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setApiTokenTestAuthMode(value as ApiTokenTestAuthMode)}
+                          className={cx(
+                            "rounded px-3 py-1 font-medium transition",
+                            apiTokenTestAuthMode === value ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                     <div className="grid gap-2 md:grid-cols-[1fr_auto]">
                       <Input placeholder="cm_..." value={apiTokenTestValue} onChange={(event) => setApiTokenTestValue(event.target.value)} className="font-mono text-xs" />
                       <Button type="button" variant="outline" onClick={testPublicApiToken}>
@@ -1571,7 +1719,45 @@ export default function Home() {
                         Tester
                       </Button>
                     </div>
-                    {apiTokenTestResult && <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{apiTokenTestResult}</p>}
+                    {apiTokenTestResult && (
+                      <div className={cx("rounded-md border p-3", apiTokenTestResult.ok ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50")}>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex min-w-0 items-center gap-2">
+                            {apiTokenTestResult.ok ? <CheckCircle2 className="h-4 w-4 text-emerald-700" /> : <XCircle className="h-4 w-4 text-red-700" />}
+                            <p className={cx("text-sm font-medium", apiTokenTestResult.ok ? "text-emerald-800" : "text-red-800")}>
+                              {apiTokenReasonLabels[apiTokenTestResult.reason] ?? apiTokenTestResult.reason}
+                            </p>
+                          </div>
+                          {apiTokenTestResult.token && <Badge tone={apiTokenTestResult.token.legacy ? "warn" : "ok"}>{apiTokenTestResult.token.name}</Badge>}
+                        </div>
+                        <p className={cx("mt-2 text-xs", apiTokenTestResult.ok ? "text-emerald-800" : "text-red-800")}>
+                          Scopes testés: {apiTokenTestResult.requestedScopes.length > 0 ? apiTokenTestResult.requestedScopes.join(", ") : "tous les probes disponibles"}
+                        </p>
+
+                        <div className="mt-3 grid gap-2">
+                          {[apiTokenTestResult.liveCheck, ...apiTokenTestResult.probes].filter(Boolean).map((probe) => {
+                            const check = probe as ApiTokenProbe;
+                            return (
+                              <div key={check.id} className="rounded-md border bg-card p-2 text-xs">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    {check.ok ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <XCircle className="h-4 w-4 text-red-600" />}
+                                    <span className="font-medium">{check.label}</span>
+                                  </div>
+                                  <Badge tone={check.ok ? "ok" : check.status === 403 ? "warn" : "bad"}>{check.status}</Badge>
+                                </div>
+                                <p className="mt-1 break-all font-mono text-muted-foreground">{check.method} {check.path}</p>
+                                <div className="mt-2 flex flex-wrap items-center gap-1">
+                                  {check.requiredScopes.length === 0 ? <Badge>sans scope</Badge> : check.requiredScopes.map((scope) => <Badge key={scope}>{apiScopeLabels[scope]?.label ?? scope}</Badge>)}
+                                  {!check.liveSafe && <Badge tone="info">{check.destructive ? "non lancé" : "scope seul"}</Badge>}
+                                </div>
+                                <p className="mt-2 text-muted-foreground">{check.message}</p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -1581,20 +1767,31 @@ export default function Home() {
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="font-medium">{token.name}</p>
-                              {token.revokedAt ? <Badge>révoqué</Badge> : <Badge tone="ok">actif</Badge>}
+                              {token.revokedAt ? <Badge>révoqué</Badge> : token.expired ? <Badge tone="bad">expiré</Badge> : <Badge tone="ok">actif</Badge>}
                             </div>
                             <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{token.tokenPrefix}...{token.lastFour}</p>
                             {token.description && <p className="mt-1 text-xs text-muted-foreground">{token.description}</p>}
-                            <p className="mt-1 text-xs text-muted-foreground">Dernier usage: {formatDate(token.lastUsedAt)} · Créé: {formatDate(token.createdAt)}</p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Usage: {token.usageCount} · Dernier usage: {formatDate(token.lastUsedAt)} · Expire: {formatDate(token.expiresAt)}
+                            </p>
+                            {(token.lastUsedIp || token.lastUsedUserAgent) && (
+                              <p className="mt-1 truncate text-xs text-muted-foreground">
+                                {token.lastUsedIp || "IP inconnue"} · {token.lastUsedUserAgent || "agent inconnu"}
+                              </p>
+                            )}
                             <div className="mt-2 flex flex-wrap gap-1">
                               {token.scopes.map((scope) => <Badge key={scope}>{apiScopeLabels[scope]?.label ?? scope}</Badge>)}
                             </div>
                           </div>
-                          {!token.revokedAt && (
-                            <Button type="button" size="sm" variant="destructive" onClick={() => revokePublicApiToken(token.id)}>
-                              Révoquer
-                            </Button>
-                          )}
+                          <div className="flex flex-wrap gap-2 sm:justify-end">
+                            {!token.revokedAt && (
+                              <>
+                                <Button type="button" size="sm" variant="outline" onClick={() => rotatePublicApiToken(token.id)}>Régénérer</Button>
+                                <Button type="button" size="sm" variant="outline" onClick={() => extendPublicApiToken(token, 90)}>+90j</Button>
+                                <Button type="button" size="sm" variant="destructive" onClick={() => revokePublicApiToken(token.id)}>Révoquer</Button>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -1921,6 +2118,9 @@ Notifier au rétablissement: oui`}</pre>
                 <div className="mt-4 overflow-hidden rounded-md border">
                   {[
                     ["GET", "/health", "Santé API"],
+                    ["GET", "/me", "Introspecter le token"],
+                    ["GET", "/scopes", "Lister scopes et probes"],
+                    ["GET", "/status", "Status public"],
                     ["GET", "/jobs", "Lister les jobs"],
                     ["POST", "/jobs", "Créer un job"],
                     ["POST", "/jobs/:id/run", "Lancer maintenant"],
@@ -1929,6 +2129,8 @@ Notifier au rétablissement: oui`}</pre>
                     ["POST", "/jobs/:id/pause", "Mettre en pause"],
                     ["POST", "/jobs/:id/resume", "Reprendre"],
                     ["GET", "/jobs/:id/runs", "Lire l'historique"],
+                    ["GET", "/deadman", "Lister les dead-man"],
+                    ["POST", "/deadman", "Créer un dead-man"],
                   ].map(([method, route, role]) => (
                     <div key={`${method}-${route}`} className="grid gap-2 border-b p-3 text-sm last:border-b-0 md:grid-cols-[80px_220px_1fr]">
                       <code>{method}</code>

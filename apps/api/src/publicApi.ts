@@ -1,8 +1,8 @@
 import { Request, Router } from "express";
 import { z } from "zod";
-import { requirePublicApiToken } from "./apiTokens.js";
+import { publicApiProbeTargets, publicApiScopes, requirePublicApiToken } from "./apiTokens.js";
 import { executeJob } from "./executor.js";
-import { createDeadman, getDashboard, getPublicStatus, pingDeadman, templates } from "./features.js";
+import { createDeadman, getDashboard, getPublicStatus, listDeadmen, pingDeadman, templates } from "./features.js";
 import { buildTransientJob, createJob, deleteJob, duplicateJob, getJob, getRunStats, jobInputSchema, listJobs, listRuns, setJobEnabled, updateJob } from "./jobs.js";
 import { openApiDocument } from "./openapi.js";
 import { runJobNow } from "./worker.js";
@@ -28,6 +28,15 @@ const publicJobSchema = z.object({
   config: z.record(z.unknown()).optional().default({}),
 });
 
+const paginationQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+}).passthrough();
+
+const statsQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(365).optional(),
+}).passthrough();
+
 function toCron(input: z.infer<typeof scheduleSchema>) {
   if (input.mode === "once") return { scheduleType: "once" as const, cronExpression: null, runAt: input.runAt, label: `Une fois ${input.runAt}` };
   if (input.mode === "cron") return { scheduleType: "cron" as const, cronExpression: input.expression, runAt: null, label: "Cron custom" };
@@ -41,10 +50,7 @@ function toCron(input: z.infer<typeof scheduleSchema>) {
 }
 
 function paginationFromQuery(req: Request) {
-  return {
-    limit: typeof req.query.limit === "string" ? Number(req.query.limit) : undefined,
-    offset: typeof req.query.offset === "string" ? Number(req.query.offset) : undefined,
-  };
+  return paginationQuerySchema.parse(req.query);
 }
 
 function toJobInput(input: z.infer<typeof publicJobSchema>) {
@@ -69,6 +75,14 @@ publicApiRouter.get("/health", requirePublicApiToken(), (_req, res) => {
   res.json({ ok: true, version: "v1" });
 });
 
+publicApiRouter.get("/me", requirePublicApiToken(), (req, res) => {
+  res.json({ token: req.publicApiToken, availableScopes: publicApiScopes });
+});
+
+publicApiRouter.get("/scopes", requirePublicApiToken(), (_req, res) => {
+  res.json({ scopes: publicApiScopes, probes: publicApiProbeTargets });
+});
+
 publicApiRouter.get("/openapi.json", requirePublicApiToken(), (_req, res) => {
   res.json(openApiDocument);
 });
@@ -83,7 +97,7 @@ publicApiRouter.get("/dashboard", requirePublicApiToken(["status:read"]), async 
 
 publicApiRouter.get("/stats/runs", requirePublicApiToken(["status:read"]), async (req, res, next) => {
   try {
-    const days = typeof req.query.days === "string" ? Number(req.query.days) : undefined;
+    const { days } = statsQuerySchema.parse(req.query);
     res.json(await getRunStats(days));
   } catch (error) {
     next(error);
@@ -213,6 +227,14 @@ publicApiRouter.post("/jobs/:id/webhook", requirePublicApiToken(["jobs:run"]), a
 publicApiRouter.get("/jobs/:id/runs", requirePublicApiToken(["jobs:read"]), async (req, res, next) => {
   try {
     res.json(await listRuns(req.params.id, paginationFromQuery(req)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+publicApiRouter.get("/deadman", requirePublicApiToken(["deadman:read"]), async (_req, res, next) => {
+  try {
+    res.json(await listDeadmen());
   } catch (error) {
     next(error);
   }

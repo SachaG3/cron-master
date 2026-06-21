@@ -192,6 +192,19 @@ const migrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS deadman_checks_enabled_status_idx ON deadman_checks(enabled, status);
     `,
   },
+  {
+    id: 8,
+    name: "api_token_metadata",
+    sql: `
+      ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+      ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+      ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS last_used_ip TEXT;
+      ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS last_used_user_agent TEXT;
+      ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS usage_count INTEGER NOT NULL DEFAULT 0;
+
+      CREATE INDEX IF NOT EXISTS api_tokens_expiry_idx ON api_tokens(expires_at);
+    `,
+  },
 ];
 
 export async function runMigrations() {

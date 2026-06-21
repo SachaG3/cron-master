@@ -109,3 +109,24 @@ CREATE TABLE IF NOT EXISTS job_runtime_state (
 );
 
 CREATE INDEX IF NOT EXISTS job_runtime_worker_claim_idx ON job_runtime_state(worker_claimed_at);
+
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  token_hash TEXT NOT NULL UNIQUE,
+  token_prefix TEXT NOT NULL,
+  last_four TEXT NOT NULL,
+  scopes JSONB NOT NULL DEFAULT '["status:read", "jobs:read"]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at TIMESTAMPTZ,
+  last_used_ip TEXT,
+  last_used_user_agent TEXT,
+  usage_count INTEGER NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS api_tokens_active_idx ON api_tokens(revoked_at, created_at DESC);
+CREATE INDEX IF NOT EXISTS api_tokens_expiry_idx ON api_tokens(expires_at);

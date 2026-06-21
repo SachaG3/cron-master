@@ -326,7 +326,7 @@ ou:
 x-api-key: cm_xxx
 ```
 
-Les tokens se gèrent dans `Settings > API publique`. Le token brut est affiché une seule fois, puis seul son préfixe et ses 4 derniers caractères restent visibles.
+Les tokens se gèrent dans `Settings > API publique`. Le token brut est affiché une seule fois, puis seul son préfixe et ses 4 derniers caractères restent visibles. L'interface propose des presets par usage, une expiration optionnelle, la rotation d'un token existant et un test détaillé: validation des scopes, appel réel `/api/v1/me` en Bearer ou `x-api-key`, puis probes par endpoint sans lancer d'action destructrice.
 
 Scopes disponibles:
 
@@ -336,6 +336,7 @@ Scopes disponibles:
 | `jobs:read` | Liste, détails et runs des jobs |
 | `jobs:write` | Création, édition, pause, reprise, suppression |
 | `jobs:run` | Exécution immédiate, dry-run, webhook |
+| `deadman:read` | Lecture des dead-man switches |
 | `deadman:write` | Création et ping dead-man |
 
 ### Endpoints
@@ -343,6 +344,9 @@ Scopes disponibles:
 | Méthode | Route | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Santé de l'API |
+| `GET` | `/me` | Token courant, scopes et mode legacy |
+| `GET` | `/scopes` | Scopes disponibles et probes de test |
+| `GET` | `/openapi.json` | Description OpenAPI |
 | `GET` | `/dashboard` | Résumé opérationnel |
 | `GET` | `/status` | Status JSON public |
 | `GET` | `/templates` | Templates disponibles |
@@ -357,6 +361,7 @@ Scopes disponibles:
 | `POST` | `/jobs/:id/pause` | Pause |
 | `POST` | `/jobs/:id/resume` | Reprise |
 | `GET` | `/jobs/:id/runs` | Historique |
+| `GET` | `/deadman` | Liste des dead-man switches |
 | `POST` | `/deadman` | Création dead-man |
 | `ALL` | `/deadman/:slug/ping` | Ping dead-man |
 
