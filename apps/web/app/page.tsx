@@ -324,6 +324,57 @@ function HelpText({ children }: { children: React.ReactNode }) {
   );
 }
 
+type IconComponent = React.ComponentType<{ className?: string }>;
+
+function DocSection({
+  id,
+  icon: Icon,
+  eyebrow,
+  title,
+  description,
+  children,
+}: {
+  id: string;
+  icon: IconComponent;
+  eyebrow?: string;
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section id={id} className="scroll-mt-6 rounded-lg border bg-card p-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          {eyebrow && <p className="text-xs font-medium uppercase text-muted-foreground">{eyebrow}</p>}
+          <h2 className="mt-1 flex items-center gap-2 text-xl font-semibold">
+            <Icon className="h-5 w-5 text-primary" />
+            {title}
+          </h2>
+          {description && <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">{description}</p>}
+        </div>
+      </div>
+      <div className="mt-5">{children}</div>
+    </section>
+  );
+}
+
+function DocCode({ children }: { children: string }) {
+  return (
+    <pre className="overflow-x-auto rounded-md border bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">
+      {children}
+    </pre>
+  );
+}
+
+function DocRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid gap-2 border-b p-3 text-sm last:border-b-0 md:grid-cols-[170px_1fr]">
+      <p className="font-medium">{label}</p>
+      <div className="text-muted-foreground">{children}</div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [runs, setRuns] = useState<JobRun[]>([]);
@@ -1949,130 +2000,237 @@ export default function Home() {
         )}
 
         {activeView === "docs" && (
-          <div className="grid gap-5 lg:grid-cols-[240px_1fr]">
+          <div className="grid gap-5 lg:grid-cols-[260px_1fr]">
             <aside className="lg:sticky lg:top-5 lg:self-start">
               <Card className="p-4">
                 <SectionTitle icon={HelpCircle} title="Docs" />
+                <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                  Manuel court pour configurer, exploiter et exposer Cron Master sans quitter l'interface.
+                </p>
                 <div className="mt-4 space-y-1 text-sm">
-                  {[
-                    ["#start", "Démarrage"],
-                    ["#concepts", "Concepts"],
-                    ["#jobs-doc", "Types de jobs"],
-                    ["#network-doc", "Suivi réseau"],
-                    ["#workflow-doc", "Workflows"],
-                    ["#ops-doc", "Opérations"],
-                    ["#api-doc", "API publique"],
-                    ["#troubleshooting-doc", "Dépannage"],
-                  ].map(([href, label]) => (
-                    <a key={href} href={href} className="block rounded-md px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+                  {([
+                    ["#start", "Démarrage", Activity],
+                    ["#concepts", "Modèle mental", FileJson],
+                    ["#jobs-doc", "Jobs", Server],
+                    ["#scheduling-doc", "Planification", CalendarClock],
+                    ["#network-doc", "Réseau", Wifi],
+                    ["#workflow-doc", "Workflows", Code2],
+                    ["#ops-doc", "Opérations", ShieldAlert],
+                    ["#api-doc", "API publique", KeyRound],
+                    ["#troubleshooting-doc", "Dépannage", HelpCircle],
+                  ] as Array<[string, string, IconComponent]>).map(([href, label, Icon]) => (
+                    <a key={href} href={href} className="flex items-center gap-2 rounded-md px-2 py-2 text-muted-foreground hover:bg-muted hover:text-foreground">
+                      <Icon className="h-4 w-4" />
                       {label}
                     </a>
                   ))}
+                </div>
+                <div className="mt-5 rounded-md border bg-muted/30 p-3">
+                  <p className="text-xs font-medium uppercase text-muted-foreground">Raccourci</p>
+                  <p className="mt-1 text-sm">Créer un job, le lancer une fois, lire le run, puis activer les notifications.</p>
                 </div>
               </Card>
             </aside>
 
             <div className="space-y-5">
-              <section id="start" className="rounded-lg border bg-card p-5">
-                <p className="text-xs font-medium uppercase text-muted-foreground">Guide produit</p>
-                <h2 className="mt-2 text-2xl font-semibold">Utiliser Cron Master proprement</h2>
-                <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
-                  Cron Master sert à créer des jobs planifiés, surveiller des services, suivre un réseau, recevoir des webhooks et exposer une API simple à d'autres applications. Le principe: créer un job lisible, le tester manuellement, puis laisser le worker gérer les exécutions, incidents et notifications.
-                </p>
-                <div className="mt-5 grid gap-3 md:grid-cols-4">
-                  {[
-                    ["1", "Créer", "Choisir le type de job et sa fréquence."],
-                    ["2", "Tester", "Lancer le job une fois manuellement."],
-                    ["3", "Observer", "Lire les runs et incidents."],
-                    ["4", "Ajuster", "Régler retries, seuils et notifications."],
-                  ].map(([step, title, body]) => (
-                    <div key={step} className="rounded-md border bg-muted/30 p-3">
-                      <p className="text-xs font-medium text-muted-foreground">Étape {step}</p>
-                      <p className="mt-1 font-medium">{title}</p>
+              <section id="start" className="scroll-mt-6 rounded-lg border bg-card p-5">
+                <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
+                  <div>
+                    <p className="text-xs font-medium uppercase text-muted-foreground">Guide produit</p>
+                    <h2 className="mt-2 text-2xl font-semibold">Piloter Cron Master avec une méthode claire</h2>
+                    <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
+                      Cron Master orchestre des jobs planifiés, des checks de disponibilité, des workflows, des dead-man switches et une API publique scopée. Cette page sert de manuel embarqué: quoi créer, comment tester, où lire les signaux, et comment durcir l'exploitation.
+                    </p>
+                    <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      {[
+                        ["1", "Décrire", "Nommer le besoin métier et choisir un type."],
+                        ["2", "Paramétrer", "Définir fréquence, seuils, retries et destinations."],
+                        ["3", "Valider", "Lancer manuellement et lire le run produit."],
+                        ["4", "Exploiter", "Suivre incidents, notifications, API et maintenances."],
+                      ].map(([step, title, body]) => (
+                        <div key={step} className="rounded-md border bg-muted/30 p-3">
+                          <p className="text-xs font-medium text-muted-foreground">Étape {step}</p>
+                          <p className="mt-1 font-medium">{title}</p>
+                          <p className="mt-1 text-xs leading-5 text-muted-foreground">{body}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-4">
+                    <p className="text-sm font-medium">Démarrage local</p>
+                    <DocCode>{`docker compose up --build
+
+Web: http://localhost:3001
+API: http://localhost:4000
+API publique: http://localhost:4000/api/v1`}</DocCode>
+                    <div className="mt-3 grid gap-2">
+                      {[
+                        ["Compte admin", "Créer le premier compte au premier accès web."],
+                        ["Notifications", "Configurer les destinations globales dans Settings."],
+                        ["Token API", "Créer un token scopé dans Settings > API publique."],
+                      ].map(([label, value]) => (
+                        <div key={label} className="flex items-start gap-2 text-sm">
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
+                          <p><span className="font-medium">{label}</span><span className="text-muted-foreground"> · {value}</span></p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <DocSection
+                id="concepts"
+                icon={FileJson}
+                eyebrow="Modèle mental"
+                title="Ce qui se passe quand un job tourne"
+                description="Cron Master reste volontairement simple: une configuration produit des runs, les runs alimentent les incidents, puis les notifications et l'API exposent l'état exploitable."
+              >
+                <div className="grid gap-3 lg:grid-cols-5">
+                  {([
+                    [Server, "Job", "Configuration versionnée par l'interface: type, schedule, config et statut actif."],
+                    [Clock, "Worker", "Boucle backend qui repère les jobs dus, exécute, puis calcule le prochain passage."],
+                    [Activity, "Run", "Résultat horodaté avec succès ou échec, message et sortie technique."],
+                    [ShieldAlert, "Incident", "Ouvert ou mis à jour quand l'échec persiste, résolu au retour OK."],
+                    [Bell, "Notification", "Signal externe vers Discord, ntfy, Slack, Telegram, Gotify, email ou webhook."],
+                  ] as Array<[IconComponent, string, string]>).map(([Icon, title, body]) => (
+                    <div key={title} className="rounded-md border p-3">
+                      <Icon className="h-5 w-5 text-primary" />
+                      <p className="mt-3 font-medium">{title}</p>
                       <p className="mt-1 text-xs leading-5 text-muted-foreground">{body}</p>
                     </div>
                   ))}
                 </div>
-              </section>
-
-              <section id="concepts" className="rounded-lg border bg-card p-5">
-                <h3 className="font-semibold">Concepts</h3>
                 <div className="mt-4 overflow-hidden rounded-md border">
                   {[
-                    ["Job", "Une tâche configurée: check, notification, rappel, workflow ou suivi réseau."],
-                    ["Run", "Une exécution d'un job, avec statut, message, durée et détails techniques."],
-                    ["Incident", "Un problème ouvert après un échec. Il est dédupliqué par job et résolu au retour OK."],
-                    ["Maintenance", "Une période prévue pendant laquelle les alertes sont suspendues."],
-                  ].map(([term, description]) => (
-                    <div key={term} className="grid gap-2 border-b p-3 text-sm last:border-b-0 md:grid-cols-[160px_1fr]">
-                      <p className="font-medium">{term}</p>
-                      <p className="text-muted-foreground">{description}</p>
+                    ["Job", "Objet que tu configures. Il peut être actif, en pause, dupliqué ou supprimé."],
+                    ["Run", "Preuve d'exécution. C'est la première source à lire pour comprendre ce qui s'est passé."],
+                    ["Incident", "État opérationnel consolidé pour éviter les doublons sur le même problème."],
+                    ["Maintenance", "Fenêtre prévue qui coupe les alertes pendant une intervention."],
+                    ["Credential", "Secret ou configuration réutilisable pour connecter des intégrations."],
+                  ].map(([label, value]) => <DocRow key={label} label={label}>{value}</DocRow>)}
+                </div>
+              </DocSection>
+
+              <DocSection
+                id="jobs-doc"
+                icon={Server}
+                eyebrow="Choix du type"
+                title="Choisir le bon job dès le départ"
+                description="Le type de job détermine les champs importants, les variables disponibles et la façon dont Cron Master ouvre les incidents. Le plus robuste est souvent le plus simple."
+              >
+                <div className="grid gap-3 xl:grid-cols-2">
+                  {([
+                    [Globe2, "Site", "Une URL HTTP doit répondre", "url, expectedStatus, timeoutMs, retryCount", "API /health, page status, webhook tiers"],
+                    [Server, "Machine", "Un port TCP doit accepter une connexion", "host, port, timeoutMs", "Postgres, Redis, MQTT, SSH interne"],
+                    [Wifi, "Réseau", "Plusieurs cibles réseau doivent rester joignables", "targets, minOnline, thresholds", "Box, VPN, VLAN, lien fibre"],
+                    [Code2, "Workflow", "Plusieurs actions doivent s'enchaîner", "blocks, variables, conditions", "Check puis notification personnalisée"],
+                    [Bell, "Notification", "Un message doit partir à une fréquence donnée", "message, destinations locales", "Digest, rappel simple, heartbeat"],
+                    [CalendarClock, "Rappel", "Une date précise doit déclencher une notification", "runAt ou cadence lisible", "Échéance, renouvellement, facturation"],
+                  ] as Array<[IconComponent, string, string, string, string]>).map(([Icon, typeName, need, config, example]) => (
+                    <div key={typeName} className="rounded-md border p-3">
+                      <div className="flex items-center gap-2">
+                        <Icon className="h-5 w-5 text-primary" />
+                        <p className="font-medium">{typeName}</p>
+                      </div>
+                      <p className="mt-2 text-sm text-muted-foreground">{need}</p>
+                      <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                        <p><span className="font-medium text-foreground">Config</span><br />{config}</p>
+                        <p><span className="font-medium text-foreground">Usage</span><br />{example}</p>
+                      </div>
                     </div>
                   ))}
                 </div>
-              </section>
+              </DocSection>
 
-              <section id="jobs-doc" className="rounded-lg border bg-card p-5">
-                <h3 className="font-semibold">Choisir le bon type de job</h3>
-                <div className="mt-4 overflow-hidden rounded-md border">
-                  {[
-                    ["Site", "Une API ou une page doit répondre", "URL + statut HTTP attendu"],
-                    ["Machine", "Un service doit écouter sur un port", "Host + port TCP"],
-                    ["Réseau", "Une box, un réseau ou un VLAN doit rester disponible", "Ping multi-cibles + timer de panne"],
-                    ["Notification", "Un message doit partir à une fréquence donnée", "Message + destination"],
-                    ["Rappel", "Une date précise ne doit pas être oubliée", "Date unique ou périodique"],
-                    ["Workflow", "Plusieurs actions doivent s'enchaîner", "Blocs notify, http, tcp, condition, webhook"],
-                  ].map(([typeName, need, config]) => (
-                    <div key={typeName} className="grid gap-2 border-b p-3 text-sm last:border-b-0 md:grid-cols-[130px_1fr_1fr]">
-                      <p className="font-medium">{typeName}</p>
-                      <p className="text-muted-foreground">{need}</p>
-                      <p className="text-muted-foreground">{config}</p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <section id="network-doc" className="rounded-lg border bg-card p-5">
-                <h3 className="font-semibold">Suivi réseau</h3>
-                <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                  Le suivi réseau ping plusieurs cibles depuis le conteneur. Il démarre un timer quand la panne est confirmée, puis calcule la durée au retour OK. Les seuils consécutifs évitent les faux positifs et les retours instables.
-                </p>
-                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+              <DocSection
+                id="scheduling-doc"
+                icon={CalendarClock}
+                eyebrow="Cadence"
+                title="Planifier sans rendre l'exploitation fragile"
+                description="L'interface traduit les intentions courantes en cron ou en date unique. Garde les checks rapides, espace les appels externes coûteux, et utilise les retries pour absorber les incidents courts."
+              >
+                <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
                   <div className="overflow-hidden rounded-md border">
                     {[
-                      ["Cibles", "Routeur | 192.168.1.1 et DNS | 1.1.1.1"],
-                      ["Cibles minimum", "1 si au moins une cible suffit à dire que le réseau répond"],
-                      ["Échecs avant panne", "2 ou 3 pour éviter une alerte sur micro-coupure"],
-                      ["Succès avant retour OK", "2 pour éviter un rétablissement trop optimiste"],
-                      ["Rappel panne", "30 ou 60 minutes, 0 pour désactiver"],
-                    ].map(([label, value]) => (
-                      <div key={label} className="grid gap-2 border-b p-3 text-sm last:border-b-0 md:grid-cols-[150px_1fr]">
-                        <p className="font-medium">{label}</p>
-                        <p className="text-muted-foreground">{value}</p>
-                      </div>
-                    ))}
+                      ["Toutes les minutes", "À réserver aux probes critiques et rapides."],
+                      ["Toutes les 5 minutes", "Bon défaut pour disponibilité web, machine et réseau."],
+                      ["Horaire", "Utile pour synchronisations, rappels légers et contrôles non critiques."],
+                      ["Quotidien", "Digest, sauvegarde, contrôle de validité, rapport."],
+                      ["Une fois", "Rappel daté; le job est désactivable après passage."],
+                      ["Cron custom", "À utiliser quand les modes lisibles ne suffisent pas."],
+                    ].map(([label, value]) => <DocRow key={label} label={label}>{value}</DocRow>)}
                   </div>
-                  <pre className="overflow-x-auto rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">{`Routeur | 192.168.1.1
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <p className="text-sm font-medium">Réglages qui changent vraiment le bruit</p>
+                    <div className="mt-3 grid gap-2">
+                      {[
+                        ["retryCount", "Retente avant d'ouvrir un échec final."],
+                        ["retryDelaySeconds", "Laisse passer une micro-coupure."],
+                        ["failureThreshold", "Confirme une panne réseau après plusieurs échecs."],
+                        ["recoveryThreshold", "Évite de déclarer le retour OK trop tôt."],
+                        ["reminderMinutes", "Rappelle une panne longue sans spammer."],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-md border bg-card p-2 text-sm">
+                          <code>{label}</code>
+                          <p className="mt-1 text-xs text-muted-foreground">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </DocSection>
+
+              <DocSection
+                id="network-doc"
+                icon={Wifi}
+                eyebrow="Monitoring"
+                title="Suivi réseau: mesurer une coupure, pas juste un ping"
+                description="Le job Réseau ping plusieurs cibles depuis le conteneur. Il confirme une panne après un nombre d'échecs consécutifs, conserve l'heure de début, puis calcule la durée au retour OK."
+              >
+                <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+                  <div className="overflow-hidden rounded-md border">
+                    {[
+                      ["targets", "Liste `label | host`. Mélange une cible locale et une cible externe."],
+                      ["minOnline", "`1` si une seule cible joignable suffit à dire que le réseau répond."],
+                      ["timeoutMs", "`1500` à `3000` ms selon le réseau et le conteneur."],
+                      ["failureThreshold", "`2` ou `3` pour ignorer une perte isolée."],
+                      ["recoveryThreshold", "`2` pour confirmer le rétablissement."],
+                      ["notifyOnRecovery", "Souvent plus utile que notifier immédiatement la panne."],
+                    ].map(([label, value]) => <DocRow key={label} label={label}>{value}</DocRow>)}
+                  </div>
+                  <div className="grid gap-3">
+                    <DocCode>{`Routeur | 192.168.1.1
 DNS Cloudflare | 1.1.1.1
 
 Fréquence: toutes les 1 à 5 minutes
 Échecs avant panne: 2
 Succès avant retour OK: 2
-Notifier au rétablissement: oui`}</pre>
+Rappel panne: 30 à 60 minutes`}</DocCode>
+                    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                      <p className="font-medium">Point d'attention</p>
+                      <p className="mt-1 leading-6">Si ICMP est bloqué par l'environnement Docker ou la cible, utilise un job Machine sur un port TCP connu au lieu d'un ping réseau.</p>
+                    </div>
+                  </div>
                 </div>
-              </section>
+              </DocSection>
 
-              <section id="workflow-doc" className="rounded-lg border bg-card p-5">
-                <h3 className="font-semibold">Workflows et variables</h3>
-                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+              <DocSection
+                id="workflow-doc"
+                icon={Code2}
+                eyebrow="Automatisation"
+                title="Workflows: composer des blocs lisibles"
+                description="Le type Workflow sert aux scénarios où un simple check ne suffit pas: appeler une URL, tester un port, attendre, poser une condition, puis notifier avec des variables."
+              >
+                <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
                   <div className="overflow-hidden rounded-md border">
                     {[
-                      ["notify", "Envoyer une notification"],
-                      ["http", "Tester une URL et récupérer STATUS / RESPONSE_TIME"],
-                      ["tcp", "Tester un host et un port"],
-                      ["condition", "Vérifier une variable avant de continuer"],
-                      ["webhook", "Appeler une URL externe"],
-                      ["wait", "Attendre quelques secondes"],
+                      ["notify", "Envoie un message avec variables."],
+                      ["http", "Appelle une URL et expose STATUS, URL et RESPONSE_TIME."],
+                      ["tcp", "Teste un host et un port."],
+                      ["condition", "Compare une variable avant de continuer."],
+                      ["webhook", "Appelle une URL externe avec méthode et body."],
+                      ["wait", "Attend quelques secondes entre deux actions."],
                     ].map(([block, role]) => (
                       <div key={block} className="grid gap-2 border-b p-3 text-sm last:border-b-0 md:grid-cols-[110px_1fr]">
                         <code>{block}</code>
@@ -2080,98 +2238,149 @@ Notifier au rétablissement: oui`}</pre>
                       </div>
                     ))}
                   </div>
-                  <div className="rounded-md border p-3">
-                    <p className="text-sm font-medium">Variables disponibles</p>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                      {["$JOB_NAME", "$NOW", "$STATUS", "$RESPONSE_TIME", "$URL", "$HOST", "$PORT"].map((variable) => (
-                        <code key={variable} className="rounded-md border bg-muted/40 px-2 py-1 text-xs">{variable}</code>
-                      ))}
+                  <div className="grid gap-3">
+                    <div className="rounded-md border p-3">
+                      <p className="text-sm font-medium">Variables pratiques</p>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        {["$JOB_NAME", "$NOW", "$STATUS", "$RESPONSE_TIME", "$URL", "$HOST", "$PORT"].map((variable) => (
+                          <code key={variable} className="rounded-md border bg-muted/40 px-2 py-1 text-xs">{variable}</code>
+                        ))}
+                      </div>
                     </div>
+                    <DocCode>{`HTTP https://example.com/health
+Condition RESPONSE_TIME < 2000
+Notify "$JOB_NAME OK en $RESPONSE_TIME ms"`}</DocCode>
                   </div>
                 </div>
-              </section>
+              </DocSection>
 
-              <section id="ops-doc" className="rounded-lg border bg-card p-5">
-                <h3 className="font-semibold">Opérations courantes</h3>
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  {[
-                    ["Exécuter", "Teste un job immédiatement sans attendre sa prochaine planification."],
-                    ["Pause", "Désactive le job et retire son prochain passage."],
-                    ["Reprendre", "Réactive le job et recalcule un prochain passage."],
-                    ["Dupliquer", "Crée une copie en pause pour préparer une variante."],
-                    ["Dead-man", "Surveille une tâche externe qui doit appeler une URL de ping."],
-                    ["Maintenance", "Suspend les alertes pendant une intervention prévue."],
-                  ].map(([title, body]) => (
+              <DocSection
+                id="ops-doc"
+                icon={ShieldAlert}
+                eyebrow="Exploitation"
+                title="Dead-man, maintenance, import/export et actions courantes"
+                description="Cette partie couvre les opérations qui gardent l'installation propre une fois les jobs créés: tester, mettre en pause, dupliquer, surveiller une tâche externe et couper les alertes prévues."
+              >
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {([
+                    [PlayCircle, "Exécuter", "Lance un job maintenant et produit un run lisible immédiatement."],
+                    [PauseCircle, "Pause / reprise", "Désactive temporairement un job puis recalcule son prochain passage."],
+                    [Copy, "Dupliquer", "Prépare une variante sans toucher au job stable."],
+                    [Webhook, "Dead-man", "Une tâche externe doit appeler une URL secrète avant l'échéance."],
+                    [CalendarClock, "Maintenance", "Suspend les alertes pendant une intervention prévue."],
+                    [Download, "Import / export", "Sauvegarde ou transporte jobs, settings et objets ops."],
+                  ] as Array<[IconComponent, string, string]>).map(([Icon, title, body]) => (
                     <div key={title} className="rounded-md border p-3">
-                      <p className="text-sm font-medium">{title}</p>
-                      <p className="mt-1 text-sm text-muted-foreground">{body}</p>
+                      <Icon className="h-5 w-5 text-primary" />
+                      <p className="mt-3 text-sm font-medium">{title}</p>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">{body}</p>
                     </div>
                   ))}
                 </div>
-              </section>
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <div className="overflow-hidden rounded-md border">
+                    {[
+                      ["Dead-man attendu", "La tâche appelle l'URL de ping avant `expectedIntervalMinutes + graceMinutes`."],
+                      ["URL secrète", "Le slug peut être généré, copié, testé et régénéré en cas de fuite."],
+                      ["Rappels", "`reminderMinutes` permet de rappeler une panne longue sans dupliquer l'incident."],
+                      ["Retour OK", "Cron Master peut notifier le rétablissement après un ping reçu."],
+                    ].map(([label, value]) => <DocRow key={label} label={label}>{value}</DocRow>)}
+                  </div>
+                  <DocCode>{`curl -X POST ${API_URL}/ping/slug-secret
 
-              <section id="api-doc" className="rounded-lg border bg-card p-5">
-                <h3 className="font-semibold">API publique</h3>
-                <p className="mt-3 text-sm text-muted-foreground">
-                  Base URL: <code>{API_URL}/api/v1</code>. Authentification: <code>Authorization: Bearer change-me-dev-key</code> ou <code>x-api-key</code>.
-                </p>
-                <div className="mt-4 overflow-hidden rounded-md border">
-                  {[
-                    ["GET", "/health", "Santé API"],
-                    ["GET", "/me", "Introspecter le token"],
-                    ["GET", "/scopes", "Lister scopes et probes"],
-                    ["GET", "/status", "Status public"],
-                    ["GET", "/jobs", "Lister les jobs"],
-                    ["POST", "/jobs", "Créer un job"],
-                    ["POST", "/jobs/:id/run", "Lancer maintenant"],
-                    ["POST", "/jobs/:id/webhook", "Déclencher avec payload"],
-                    ["POST", "/jobs/:id/duplicate", "Dupliquer en pause"],
-                    ["POST", "/jobs/:id/pause", "Mettre en pause"],
-                    ["POST", "/jobs/:id/resume", "Reprendre"],
-                    ["GET", "/jobs/:id/runs", "Lire l'historique"],
-                    ["GET", "/deadman", "Lister les dead-man"],
-                    ["POST", "/deadman", "Créer un dead-man"],
-                  ].map(([method, route, role]) => (
-                    <div key={`${method}-${route}`} className="grid gap-2 border-b p-3 text-sm last:border-b-0 md:grid-cols-[80px_220px_1fr]">
-                      <code>{method}</code>
-                      <code>{route}</code>
-                      <p className="text-muted-foreground">{role}</p>
-                    </div>
-                  ))}
+# Usage recommandé
+backup.sh && curl -fsS "$CRON_MASTER_PING_URL"`}</DocCode>
                 </div>
-                <pre className="mt-4 overflow-x-auto rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">{`curl -X POST ${API_URL}/api/v1/jobs \\
-  -H "authorization: Bearer change-me-dev-key" \\
+              </DocSection>
+
+              <DocSection
+                id="api-doc"
+                icon={KeyRound}
+                eyebrow="Intégrations"
+                title="API publique et tokens scopés"
+                description="L'API publique est versionnée sous /api/v1. Les tokens se créent dans Settings > API publique avec des scopes précis, une expiration optionnelle, la rotation, la révocation et un test non destructif par endpoint."
+              >
+                <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+                  <div className="grid gap-3">
+                    <div className="rounded-md border p-3">
+                      <p className="text-sm font-medium">Authentification</p>
+                      <DocCode>{`Authorization: Bearer cm_live_xxx
+# ou
+x-api-key: cm_live_xxx`}</DocCode>
+                    </div>
+                    <div className="overflow-hidden rounded-md border">
+                      {[
+                        ["status:read", "health, dashboard, status, stats"],
+                        ["jobs:read", "liste, détail et runs des jobs"],
+                        ["jobs:write", "création, édition, pause, reprise, suppression"],
+                        ["jobs:run", "run immédiat, dry-run, webhook"],
+                        ["deadman:read", "lecture des dead-man switches"],
+                        ["deadman:write", "création et ping dead-man"],
+                      ].map(([scope, value]) => <DocRow key={scope} label={scope}>{value}</DocRow>)}
+                    </div>
+                  </div>
+                  <div className="overflow-hidden rounded-md border">
+                    {[
+                      ["GET", "/health", "Vérifier que l'API répond", "aucun"],
+                      ["GET", "/me", "Inspecter le token courant", "aucun"],
+                      ["GET", "/scopes", "Lire scopes et probes de test", "aucun"],
+                      ["GET", "/status", "Lire la page de statut JSON", "status:read"],
+                      ["GET", "/jobs", "Lister les jobs", "jobs:read"],
+                      ["POST", "/jobs", "Créer un job", "jobs:write"],
+                      ["POST", "/jobs/test", "Dry-run sans sauvegarde", "jobs:run"],
+                      ["POST", "/jobs/:id/run", "Lancer maintenant", "jobs:run"],
+                      ["GET", "/deadman", "Lister les dead-man", "deadman:read"],
+                      ["POST", "/deadman", "Créer un dead-man", "deadman:write"],
+                    ].map(([method, route, role, scope]) => (
+                      <div key={`${method}-${route}`} className="grid gap-2 border-b p-3 text-sm last:border-b-0 md:grid-cols-[70px_180px_1fr_120px]">
+                        <code>{method}</code>
+                        <code className="break-all">{route}</code>
+                        <p className="text-muted-foreground">{role}</p>
+                        <Badge tone={scope === "aucun" ? "neutral" : "info"}>{scope}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <DocCode>{`curl ${API_URL}/api/v1/me \\
+  -H "authorization: Bearer $CRON_MASTER_TOKEN"`}</DocCode>
+                  <DocCode>{`curl -X POST ${API_URL}/api/v1/jobs \\
+  -H "authorization: Bearer $CRON_MASTER_TOKEN" \\
   -H "content-type: application/json" \\
   -d '{
-    "name": "Suivi réseau",
-    "type": "network_monitor",
-    "schedule": { "mode": "every_minutes", "value": 1 },
-    "config": {
-      "targets": [{ "label": "Routeur", "host": "192.168.1.1" }],
-      "failureThreshold": 2,
-      "recoveryThreshold": 2,
-      "notifyOnRecovery": true
-    }
-  }'`}</pre>
-              </section>
+    "name": "Check API publique",
+    "type": "website_check",
+    "schedule": { "mode": "every_minutes", "value": 5 },
+    "config": { "url": "https://example.com/health", "expectedStatus": 200 }
+  }'`}</DocCode>
+                </div>
+              </DocSection>
 
-              <section id="troubleshooting-doc" className="rounded-lg border bg-card p-5">
-                <h3 className="font-semibold">Dépannage</h3>
-                <div className="mt-4 overflow-hidden rounded-md border">
+              <DocSection
+                id="troubleshooting-doc"
+                icon={HelpCircle}
+                eyebrow="Diagnostic"
+                title="Dépannage rapide"
+                description="Commence toujours par le run le plus récent: il donne le message exact, la sortie technique et le moment de l'échec. Ensuite seulement, regarde les notifications et l'API."
+              >
+                <div className="overflow-hidden rounded-md border">
                   {[
-                    ["Ping réseau toujours KO", "La cible bloque peut-être ICMP. Essaie 127.0.0.1, puis utilise Machine TCP si ICMP est filtré."],
-                    ["Trop d'alertes", "Augmente les seuils consécutifs, ajoute des retries ou crée une maintenance."],
-                    ["Pas de notification", "Teste les notifications dans Settings, puis vérifie les destinations locales du job."],
-                    ["Job qui ne part pas", "Vérifie qu'il est actif, regarde son prochain passage, puis lance une exécution manuelle."],
-                    ["API 401", "Vérifie la clé dans Authorization Bearer ou x-api-key."],
+                    ["Ping réseau toujours KO", "ICMP peut être filtré. Teste depuis le conteneur, baisse l'ambition du check ou utilise Machine TCP."],
+                    ["Trop d'alertes", "Augmente retries, `failureThreshold`, `recoveryThreshold`, ou ajoute une fenêtre de maintenance."],
+                    ["Pas de notification", "Teste les destinations dans Settings, puis vérifie si le job utilise les notifications globales ou locales."],
+                    ["Job sans exécution", "Vérifie `enabled`, le prochain passage, le fuseau horaire et lance une exécution manuelle."],
+                    ["Incident qui reste ouvert", "Le job doit réussir une fois pour résoudre automatiquement, sinon résous l'incident manuellement."],
+                    ["API 401", "Token absent, invalide, expiré ou révoqué. Teste-le dans Settings > API publique."],
+                    ["API 403", "Le token est valide mais il manque le scope requis pour l'endpoint."],
+                    ["Webhook refusé", "Vérifie la signature HMAC si le job en attend une, sinon le payload est accepté tel quel."],
                   ].map(([problem, fix]) => (
-                    <div key={problem} className="grid gap-2 border-b p-3 text-sm last:border-b-0 md:grid-cols-[220px_1fr]">
+                    <div key={problem} className="grid gap-2 border-b p-3 text-sm last:border-b-0 md:grid-cols-[230px_1fr]">
                       <p className="font-medium">{problem}</p>
                       <p className="text-muted-foreground">{fix}</p>
                     </div>
                   ))}
                 </div>
-              </section>
+              </DocSection>
             </div>
           </div>
         )}
